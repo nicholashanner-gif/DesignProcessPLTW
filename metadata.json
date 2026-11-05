@@ -1,0 +1,6 @@
+{
+  "name": "DesignQuest: The Engineering Design Journey",
+  "description": "An interactive, gamified learning platform teaching students the 5 stages of the design process with unlockable levels, star ratings, and Google Classroom certificate sharing.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
