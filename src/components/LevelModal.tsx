@@ -255,35 +255,23 @@ export const LevelModal: React.FC<LevelModalProps> = ({
     window.speechSynthesis.speak(utterance);
   };
 
-  // Multiple Choice Handler
+  // Multiple Choice Handler (Neutral selection only while thinking timer runs; no cheating reveal!)
   const handleSelectOption = (challengeId: string, optionId: string) => {
+    if (showFeedback[challengeId]) return; // locked once submitted
     setUserAnswers(prev => ({ ...prev, [challengeId]: optionId }));
-    setShowFeedback(prev => ({ ...prev, [challengeId]: true }));
-    
-    const challenge = level.challenges.find(c => c.id === challengeId);
-    const selectedOpt = challenge?.options?.find(o => o.id === optionId);
-    if (selectedOpt?.isCorrect) {
-      handleSound('correct');
-    } else {
-      handleSound('wrong');
-    }
+    handleSound('click');
   };
 
-  // Scenario Decision Handler
+  // Scenario Decision Handler (Neutral selection only while timer runs)
   const handleSelectScenario = (challengeId: string, choiceId: string) => {
+    if (showFeedback[challengeId]) return; // locked once submitted
     setUserAnswers(prev => ({ ...prev, [challengeId]: choiceId }));
-    setShowFeedback(prev => ({ ...prev, [challengeId]: true }));
-    const challenge = level.challenges.find(c => c.id === challengeId);
-    const chosen = challenge?.scenario?.choices.find(c => c.id === choiceId);
-    if (chosen?.isBest) {
-      handleSound('correct');
-    } else {
-      handleSound('wrong');
-    }
+    handleSound('click');
   };
 
   // Classify Items Handler (Toggle category for an item)
   const handleAssignCategory = (challengeId: string, itemId: string, categoryId: string) => {
+    if (showFeedback[challengeId]) return;
     setUserAnswers(prev => {
       const currentMap = prev[challengeId] || {};
       return {
@@ -299,6 +287,7 @@ export const LevelModal: React.FC<LevelModalProps> = ({
 
   // Order Steps Handler (Swap or move)
   const handleMoveStep = (challengeId: string, itemIndex: number, direction: 'up' | 'down') => {
+    if (showFeedback[challengeId]) return;
     const challenge = level.challenges.find(c => c.id === challengeId);
     if (!challenge || !challenge.draggableItems) return;
 
@@ -318,6 +307,53 @@ export const LevelModal: React.FC<LevelModalProps> = ({
       };
     });
     handleSound('click');
+  };
+
+  // Submit Challenge Answer: Only callable once timer is over, locks in answer and reveals feedback
+  const handleSubmitChallengeAnswer = () => {
+    if (!currentChallenge || !isCurrentChallengeAnswered() || timeLeft > 0) return;
+
+    setShowFeedback(prev => ({ ...prev, [currentChallenge.id]: true }));
+
+    // Evaluate correctness to play appropriate audio feedback
+    if (currentChallenge.type === 'multiple-choice') {
+      const selectedId = userAnswers[currentChallenge.id];
+      const opt = currentChallenge.options?.find(o => o.id === selectedId);
+      if (opt?.isCorrect) {
+        handleSound('correct');
+      } else {
+        handleSound('wrong');
+      }
+    } else if (currentChallenge.type === 'scenario-decision') {
+      const selectedId = userAnswers[currentChallenge.id];
+      const choice = currentChallenge.scenario?.choices.find(c => c.id === selectedId);
+      if (choice?.isBest) {
+        handleSound('correct');
+      } else {
+        handleSound('wrong');
+      }
+    } else if (currentChallenge.type === 'classify-items') {
+      const itemAnswers = userAnswers[currentChallenge.id] || {};
+      const items = currentChallenge.draggableItems || [];
+      const allCorrect = items.every(it => itemAnswers[it.id] === it.correctCategoryId);
+      if (allCorrect) {
+        handleSound('correct');
+      } else {
+        handleSound('wrong');
+      }
+    } else if (currentChallenge.type === 'order-steps') {
+      const items = currentChallenge.draggableItems || [];
+      const currentOrder: string[] = userAnswers[currentChallenge.id] || items.map(i => i.id);
+      const allCorrect = currentOrder.every((id, idx) => {
+        const item = items.find(i => i.id === id);
+        return item && item.correctOrder === idx + 1;
+      });
+      if (allCorrect) {
+        handleSound('correct');
+      } else {
+        handleSound('wrong');
+      }
+    }
   };
 
   // Evaluate Level completion
@@ -511,10 +547,15 @@ export const LevelModal: React.FC<LevelModalProps> = ({
                         <span className="font-semibold text-amber-900">
                           Thinking Timer: <strong className="font-mono font-bold text-amber-950">{timeLeft}s</strong> remaining before advancing
                         </span>
+                      ) : !showFeedback[currentChallenge.id] ? (
+                        <span className="font-bold text-indigo-700 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-indigo-600" />
+                          15s Timer Complete — Review your choice and click "Submit Answer" below!
+                        </span>
                       ) : (
                         <span className="font-bold text-emerald-700 flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5" />
-                          15s Reading Time Complete — Ready to submit/advance!
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Answer submitted! Review the explanation below before advancing.
                         </span>
                       )}
                     </div>
@@ -558,33 +599,61 @@ export const LevelModal: React.FC<LevelModalProps> = ({
                   {/* Multiple Choice Options */}
                   {currentChallenge.type === 'multiple-choice' && currentChallenge.options && (
                     <div className="space-y-2.5">
-                      {currentChallenge.options.map(opt => {
+                      {currentChallenge.options.map((opt, optIdx) => {
                         const isSelected = userAnswers[currentChallenge.id] === opt.id;
-                        const revealed = showFeedback[currentChallenge.id];
+                        const revealed = Boolean(showFeedback[currentChallenge.id]);
                         let btnStyle = 'bg-white border-slate-200 hover:border-slate-300 text-slate-800';
 
                         if (revealed) {
                           if (opt.isCorrect) {
-                            btnStyle = 'bg-emerald-50 border-emerald-400 text-emerald-950 ring-2 ring-emerald-300';
+                            btnStyle = 'bg-emerald-50 border-emerald-500 text-emerald-950 ring-2 ring-emerald-400 font-semibold';
                           } else if (isSelected && !opt.isCorrect) {
-                            btnStyle = 'bg-rose-50 border-rose-400 text-rose-950 ring-2 ring-rose-300';
+                            btnStyle = 'bg-rose-50 border-rose-500 text-rose-950 ring-2 ring-rose-400 font-semibold';
+                          } else {
+                            btnStyle = 'bg-slate-50/60 border-slate-200 text-slate-400 opacity-60';
                           }
                         } else if (isSelected) {
-                          btnStyle = 'bg-amber-50 border-amber-400 text-amber-950 ring-2 ring-amber-300';
+                          // Neutral selection state: NO green, NO red while timer is running or before submit!
+                          btnStyle = 'bg-amber-50/80 border-amber-500 text-amber-950 ring-2 ring-amber-400 shadow-xs font-semibold';
                         }
 
                         return (
                           <button
                             key={opt.id}
                             onClick={() => handleSelectOption(currentChallenge.id, opt.id)}
-                            className={`w-full p-4 rounded-2xl border-2 text-left font-medium text-sm flex items-start justify-between gap-3 transition-all ${btnStyle}`}
+                            disabled={revealed}
+                            className={`w-full p-4 rounded-2xl border-2 text-left text-sm flex items-start justify-between gap-3 transition-all ${btnStyle} ${revealed ? 'cursor-default' : 'cursor-pointer'}`}
                           >
-                            <span>{opt.label}</span>
+                            <div className="flex items-start gap-3">
+                              <span className={`w-6 h-6 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                                revealed && opt.isCorrect
+                                  ? 'bg-emerald-600 text-white'
+                                  : revealed && isSelected && !opt.isCorrect
+                                  ? 'bg-rose-600 text-white'
+                                  : isSelected
+                                  ? 'bg-amber-500 text-white'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                {String.fromCharCode(65 + optIdx)}
+                              </span>
+                              <span className="leading-relaxed">{opt.label}</span>
+                            </div>
                             {revealed && opt.isCorrect && (
-                              <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                              <span className="flex items-center gap-1 text-xs font-bold text-emerald-700 bg-emerald-100/90 px-2 py-0.5 rounded-md shrink-0">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                <span>Correct Answer</span>
+                              </span>
                             )}
                             {revealed && isSelected && !opt.isCorrect && (
-                              <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                              <span className="flex items-center gap-1 text-xs font-bold text-rose-700 bg-rose-100/90 px-2 py-0.5 rounded-md shrink-0">
+                                <AlertCircle className="w-4 h-4 text-rose-600" />
+                                <span>Incorrect</span>
+                              </span>
+                            )}
+                            {!revealed && isSelected && (
+                              <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full shrink-0 border border-amber-200">
+                                Selected
+                              </span>
                             )}
                           </button>
                         );
@@ -599,32 +668,56 @@ export const LevelModal: React.FC<LevelModalProps> = ({
                         Context: {currentChallenge.scenario.context}
                       </div>
                       <div className="space-y-2.5">
-                        {currentChallenge.scenario.choices.map(choice => {
+                        {currentChallenge.scenario.choices.map((choice, chIdx) => {
                           const isSelected = userAnswers[currentChallenge.id] === choice.id;
-                          const revealed = showFeedback[currentChallenge.id];
+                          const revealed = Boolean(showFeedback[currentChallenge.id]);
 
-                          let cardStyle = 'bg-white border-slate-200 hover:border-slate-300';
+                          let cardStyle = 'bg-white border-slate-200 hover:border-slate-300 text-slate-800';
                           if (revealed) {
                             if (choice.isBest) {
-                              cardStyle = 'bg-emerald-50 border-emerald-400 text-emerald-950';
+                              cardStyle = 'bg-emerald-50 border-emerald-500 text-emerald-950 ring-2 ring-emerald-400 font-semibold';
                             } else if (isSelected) {
-                              cardStyle = 'bg-amber-50 border-amber-400 text-amber-950';
+                              cardStyle = 'bg-amber-50 border-amber-400 text-amber-950 ring-2 ring-amber-300';
+                            } else {
+                              cardStyle = 'bg-slate-50/60 border-slate-200 text-slate-400 opacity-60';
                             }
                           } else if (isSelected) {
-                            cardStyle = 'bg-amber-50 border-amber-400 text-amber-950';
+                            cardStyle = 'bg-amber-50/80 border-amber-500 text-amber-950 ring-2 ring-amber-400 shadow-xs font-semibold';
                           }
 
                           return (
                             <button
                               key={choice.id}
                               onClick={() => handleSelectScenario(currentChallenge.id, choice.id)}
-                              className={`w-full p-4 rounded-2xl border-2 text-left text-sm transition-all flex flex-col gap-1 ${cardStyle}`}
+                              disabled={revealed}
+                              className={`w-full p-4 rounded-2xl border-2 text-left text-sm transition-all flex flex-col gap-1 ${cardStyle} ${revealed ? 'cursor-default' : 'cursor-pointer'}`}
                             >
-                              <span className="font-semibold text-slate-900">{choice.text}</span>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex items-start gap-2.5">
+                                  <span className={`w-6 h-6 rounded-lg text-xs font-bold flex items-center justify-center shrink-0 mt-0.5 ${
+                                    revealed && choice.isBest
+                                      ? 'bg-emerald-600 text-white'
+                                      : isSelected
+                                      ? 'bg-amber-500 text-white'
+                                      : 'bg-slate-100 text-slate-600'
+                                  }`}>
+                                    {String.fromCharCode(65 + chIdx)}
+                                  </span>
+                                  <span className="font-semibold text-slate-900 leading-snug">{choice.text}</span>
+                                </div>
+                                {!revealed && isSelected && (
+                                  <span className="text-[11px] font-bold text-amber-800 bg-amber-100 px-2.5 py-0.5 rounded-full shrink-0 border border-amber-200">
+                                    Selected
+                                  </span>
+                                )}
+                              </div>
                               {revealed && (
-                                <p className="text-xs text-slate-600 mt-1 pt-1 border-t border-slate-200/80">
-                                  {choice.feedback}
-                                </p>
+                                <div className="text-xs text-slate-600 mt-1 pt-1.5 border-t border-slate-200/80 flex items-center justify-between">
+                                  <span>{choice.feedback}</span>
+                                  <span className={`font-bold px-2 py-0.5 rounded text-[11px] ${choice.isBest ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}`}>
+                                    +{choice.points} pts
+                                  </span>
+                                </div>
                               )}
                             </button>
                           );
@@ -908,44 +1001,46 @@ export const LevelModal: React.FC<LevelModalProps> = ({
                 Previous
               </button>
 
-              {currentChallengeIdx < totalChallenges - 1 ? (
+              {/* Challenge Progression Controls */}
+              {timeLeft > 0 ? (
+                /* Timer is counting down (15s reading / thinking period): button is locked */
+                <button
+                  disabled
+                  className="game-btn px-5 py-2.5 rounded-xl text-xs font-display font-bold bg-slate-900/60 text-slate-300 opacity-60 cursor-not-allowed flex items-center gap-1.5 shadow-sm"
+                >
+                  <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>Read & Think ({timeLeft}s)</span>
+                </button>
+              ) : !showFeedback[currentChallenge.id] ? (
+                /* Timer is 0s and answer NOT submitted yet: "Submit Answer" button! */
+                <button
+                  onClick={handleSubmitChallengeAnswer}
+                  disabled={!isCurrentChallengeAnswered()}
+                  className="game-btn px-6 py-2.5 rounded-xl text-xs font-display font-bold bg-gradient-to-r from-indigo-600 via-blue-600 to-emerald-600 text-white hover:from-indigo-500 hover:to-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 shadow-md shadow-indigo-500/25 animate-pulse cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+                  <span>{isCurrentChallengeAnswered() ? 'Submit Answer' : 'Select an Answer to Submit'}</span>
+                </button>
+              ) : currentChallengeIdx < totalChallenges - 1 ? (
+                /* Answer submitted & feedback revealed: advance to Next Challenge */
                 <button
                   onClick={() => {
                     setCurrentChallengeIdx(prev => prev + 1);
                     handleSound('click');
                   }}
-                  disabled={!isCurrentChallengeAnswered() || timeLeft > 0}
-                  className="game-btn px-5 py-2.5 rounded-xl text-xs font-display font-bold bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-1.5 shadow-sm"
+                  className="game-btn px-5 py-2.5 rounded-xl text-xs font-display font-bold bg-slate-900 text-white hover:bg-slate-800 flex items-center gap-1.5 shadow-sm hover:scale-105 cursor-pointer"
                 >
-                  {timeLeft > 0 ? (
-                    <>
-                      <Clock className="w-3.5 h-3.5 animate-spin" />
-                      <span>Read & Think ({timeLeft}s)</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>Next Challenge</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </>
-                  )}
+                  <span>Next Challenge</span>
+                  <ChevronRight className="w-4 h-4" />
                 </button>
               ) : (
+                /* Final challenge submitted & feedback revealed: Score & Complete Level */
                 <button
                   onClick={handleFinishLevel}
-                  disabled={!isCurrentChallengeAnswered() || timeLeft > 0}
-                  className="game-btn px-6 py-2.5 rounded-xl text-xs font-display font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-600 hover:to-orange-600 disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 shadow-md shadow-orange-500/20"
+                  className="game-btn px-6 py-2.5 rounded-xl text-xs font-display font-bold bg-gradient-to-r from-amber-500 to-orange-500 text-white hover:from-amber-600 hover:to-orange-600 flex items-center gap-2 shadow-md shadow-orange-500/20 hover:scale-105 cursor-pointer"
                 >
-                  {timeLeft > 0 ? (
-                    <>
-                      <Clock className="w-3.5 h-3.5 animate-spin" />
-                      <span>Read & Think ({timeLeft}s)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-4 h-4" />
-                      <span>Submit & Score Level</span>
-                    </>
-                  )}
+                  <Sparkles className="w-4 h-4" />
+                  <span>Score & Complete Level</span>
                 </button>
               )}
             </>
