@@ -8,6 +8,7 @@
     "build": "vite build && rm -rf docs && cp -r dist docs && touch docs/.nojekyll",
     "preview": "vite preview",
     "clean": "rm -rf dist docs server.js",
+    "test": "tsx --test src/utils/designQuestRules.test.ts",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

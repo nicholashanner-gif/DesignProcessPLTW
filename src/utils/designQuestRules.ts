@@ -107,10 +107,10 @@ export const ARCADE_GAMES: Record<ArcadeGameId, ArcadeGameInfo> = {
     stageNumber: 1,
     title: 'Problem Invaders',
     arcadeClassic: 'Space Invaders / Galaga',
-    tagline: 'Shoot down alien ships before they descend! Speed & lasers increase 10% each wave.',
+    tagline: 'Shoot varied alien fleets & shootable bombs! Maintain >70% accuracy, dodge divebombers, and ace Challenge Rounds every 3rd wave.',
     themeColor: '#f59e0b',
     accentBg: 'from-amber-600 to-orange-700',
-    instructions: 'Use [Left] / [Right] to steer your cannon and [Space] or [Fire] to blast alien ships. Aliens shoot back! 3 Lives.'
+    instructions: 'Steer with [Left] / [Right] and blast with [Space]. Shoot dropped bombs to detonate them in mid-air! Watch for divebombing ships (2x pts). Maintain >70% accuracy for bonuses, and test your speed in Challenge Stages every 3rd round! 3 Lives.'
   },
   dig_dug: {
     id: 'dig_dug',
@@ -204,6 +204,146 @@ export function isStageFullyCompleted(
     const p = safeProgress[l.id];
     return p && p.completed && (p.stars || 0) >= 1;
   });
+}
+
+/**
+ * Calculates shooting accuracy percentage (0-100%).
+ */
+export function calculateInvaderAccuracy(shotsFired: number, shotsHit: number): number {
+  if (shotsFired <= 0) return 0;
+  return Math.min(100, Math.max(0, Math.round((shotsHit / shotsFired) * 100)));
+}
+
+/**
+ * Calculates accuracy bonus for Problem Invaders.
+ * If accuracy >= 70%, awards substantial bonus scaling with accuracy and wave number.
+ */
+export function getInvaderAccuracyBonus(accuracy: number, wave: number = 1): number {
+  if (accuracy < 70) return 0;
+  const waveMultiplier = 1 + (Math.max(1, wave) - 1) * 0.15;
+  const baseBonus = 500;
+  const accuracyExcess = accuracy - 70; // 0 to 30
+  return Math.round((baseBonus + accuracyExcess * 25) * waveMultiplier);
+}
+
+/**
+ * Determines whether a given wave is a special Challenge Round (every 3rd level: 3, 6, 9...).
+ */
+export function isChallengeRound(wave: number): boolean {
+  return wave > 0 && wave % 3 === 0;
+}
+
+/**
+ * Evaluates performance in a Challenge Round and awards score bonus.
+ */
+export function getChallengeStageBonus(targetsHit: number, totalTargets: number): { points: number; label: string } {
+  if (totalTargets <= 0 || targetsHit <= 0) {
+    return { points: 0, label: 'Challenge Incomplete' };
+  }
+  const ratio = targetsHit / totalTargets;
+  if (ratio >= 1.0) {
+    return { points: 2500, label: '⭐ PERFECT 100% CHALLENGE CLEAR! ⭐' };
+  }
+  if (ratio >= 0.8) {
+    return { points: 1500, label: '🎯 EXCELLENT SPEED & ACCURACY!' };
+  }
+  if (ratio >= 0.6) {
+    return { points: 800, label: '⚡ GREAT SHOOTING!' };
+  }
+  return { points: 400, label: 'CHALLENGE CLEARED!' };
+}
+
+export interface InvaderRowConfig {
+  type: 'mothership' | 'crab' | 'stinger' | 'bomber' | 'interceptor' | 'quantum' | 'plasma_titan' | 'phantom_raider' | 'comet_striker' | 'phoenix' | 'aero_dart' | 'solar_orb';
+  name: string;
+  points: number;
+  color: string;
+  accentColor: string;
+  canBomb: boolean;
+  canDivebomb: boolean;
+}
+
+/**
+ * Returns distinct ship configs and visual palettes per row for a given wave.
+ */
+export function getWaveShipConfigs(wave: number): { row0: InvaderRowConfig; row1: InvaderRowConfig; row2: InvaderRowConfig } {
+  if (isChallengeRound(wave)) {
+    // Challenge stage: acrobatic swift targets
+    return {
+      row0: {
+        type: 'phoenix',
+        name: 'Golden Phoenix Drone',
+        points: 250,
+        color: '#f59e0b',
+        accentColor: '#fef08a',
+        canBomb: false,
+        canDivebomb: true
+      },
+      row1: {
+        type: 'aero_dart',
+        name: 'Aero Dart Fighter',
+        points: 200,
+        color: '#06b6d4',
+        accentColor: '#67e8f9',
+        canBomb: false,
+        canDivebomb: true
+      },
+      row2: {
+        type: 'solar_orb',
+        name: 'Solar Energy Core',
+        points: 150,
+        color: '#ec4899',
+        accentColor: '#f472b6',
+        canBomb: false,
+        canDivebomb: true
+      }
+    };
+  }
+
+  // Regular combat waves: cycle and evolve enemy varieties
+  const tier = Math.floor((wave - 1) / 3) % 3;
+  const waveInTier = (wave - 1) % 3; // 0 or 1 (since 2 is challenge round)
+
+  if (tier === 0) {
+    if (waveInTier === 0) {
+      // Wave 1: Classic Fleet
+      return {
+        row0: { type: 'mothership', name: 'Command Cruiser', points: 200, color: '#ec4899', accentColor: '#facc15', canBomb: true, canDivebomb: true },
+        row1: { type: 'crab', name: 'Alien Crab Scout', points: 150, color: '#06b6d4', accentColor: '#ef4444', canBomb: false, canDivebomb: true },
+        row2: { type: 'stinger', name: 'Stinger Fighter', points: 100, color: '#10b981', accentColor: '#fbbf24', canBomb: false, canDivebomb: true }
+      };
+    } else {
+      // Wave 2: Heavy Bomber & Interceptor Fleet
+      return {
+        row0: { type: 'bomber', name: 'Heavy Dreadnought Bomber', points: 260, color: '#ea580c', accentColor: '#fbbf24', canBomb: true, canDivebomb: true },
+        row1: { type: 'interceptor', name: 'Stealth Interceptor', points: 180, color: '#8b5cf6', accentColor: '#38bdf8', canBomb: true, canDivebomb: true },
+        row2: { type: 'quantum', name: 'Quantum Swarmer', points: 120, color: '#eab308', accentColor: '#84cc16', canBomb: false, canDivebomb: true }
+      };
+    }
+  } else if (tier === 1) {
+    if (waveInTier === 0) {
+      // Wave 4: Plasma Titans & Phantom Raiders
+      return {
+        row0: { type: 'plasma_titan', name: 'Plasma Titan', points: 320, color: '#dc2626', accentColor: '#f87171', canBomb: true, canDivebomb: true },
+        row1: { type: 'phantom_raider', name: 'Phantom Raider', points: 220, color: '#0284c7', accentColor: '#a855f7', canBomb: true, canDivebomb: true },
+        row2: { type: 'comet_striker', name: 'Comet Striker', points: 160, color: '#f8fafc', accentColor: '#38bdf8', canBomb: false, canDivebomb: true }
+      };
+    } else {
+      // Wave 5: Apex Fleet
+      return {
+        row0: { type: 'bomber', name: 'Orbital Bombard Ship', points: 360, color: '#f97316', accentColor: '#fde047', canBomb: true, canDivebomb: true },
+        row1: { type: 'interceptor', name: 'Void Stalker', points: 260, color: '#a855f7', accentColor: '#f43f5e', canBomb: true, canDivebomb: true },
+        row2: { type: 'quantum', name: 'Pulse Dart', points: 180, color: '#14b8a6', accentColor: '#facc15', canBomb: false, canDivebomb: true }
+      };
+    }
+  } else {
+    // Tier 2+ (Wave 7+): Elite Dreadnought Swarm
+    return {
+      row0: { type: 'plasma_titan', name: 'Apex Mothership', points: 400, color: '#e11d48', accentColor: '#facc15', canBomb: true, canDivebomb: true },
+      row1: { type: 'phantom_raider', name: 'Nova Vanguard', points: 300, color: '#6366f1', accentColor: '#22d3ee', canBomb: true, canDivebomb: true },
+      row2: { type: 'comet_striker', name: 'Solar Interceptor', points: 200, color: '#f59e0b', accentColor: '#ec4899', canBomb: true, canDivebomb: true }
+    };
+  }
 }
 
 export interface Badge {

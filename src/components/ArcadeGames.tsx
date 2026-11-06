@@ -27,7 +27,12 @@ import {
   ArcadeGameId,
   ArcadeScores,
   ARCADE_GAMES,
-  playSynthSound
+  playSynthSound,
+  calculateInvaderAccuracy,
+  getInvaderAccuracyBonus,
+  isChallengeRound,
+  getChallengeStageBonus,
+  getWaveShipConfigs
 } from '../utils/designQuestRules';
 
 interface ArcadeGamesModalProps {
@@ -60,6 +65,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
   // Extra HUD states for game-specific feedback
   const [waveNumber, setWaveNumber] = useState(1);
+  const [invaderAccuracy, setInvaderAccuracy] = useState(100);
   const [digDugTimeLeft, setDigDugTimeLeft] = useState(120);
   const [tetrisLinesCleared, setTetrisLinesCleared] = useState(0);
   const [archeryDistance, setArcheryDistance] = useState<'near' | 'mid' | 'far'>('mid');
@@ -84,6 +90,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
     setCurrentScore(0);
     setLives(3);
     setWaveNumber(1);
+    setInvaderAccuracy(100);
     setDigDugTimeLeft(120);
     setTetrisLinesCleared(0);
   };
@@ -134,7 +141,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
     };
 
     // -----------------------------------------------------------
-    // 1. SPACE INVADERS / GALAGA (Stage 1: Ask Arcade)
+    // 1. SPACE INVADERS / GALAGA (Stage 1: Problem Invaders)
     // -----------------------------------------------------------
     if (activeGameId === 'space_invaders') {
       let playerX = canvas.width / 2;
@@ -142,46 +149,335 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
       const playerSpeed = 6.2;
       let bullets: { x: number; y: number; active: boolean }[] = [];
       let alienLasers: { x: number; y: number; active: boolean; vy: number }[] = [];
+      let alienBombs: { id: number; x: number; y: number; vy: number; radius: number; fuse: number; active: boolean }[] = [];
+      let explosions: { x: number; y: number; radius: number; maxRadius: number; color: string; life: number; isMidAir?: boolean }[] = [];
+      let floatTexts: { text: string; x: number; y: number; color: string; life: number; vy: number }[] = [];
+
       let lastShot = 0;
       let lastAlienShot = 0;
+      let lastBombDrop = 0;
+      let lastDivebombTime = 0;
       let playerInvulnerableUntil = 1500;
       let currentWave = 1;
-      let waveBannerTime = 2000; // Show wave announcement
+      let waveBannerTime = 2200;
+      let waveBannerText = '⚡ WAVE 1 • ALIEN FLEET ASSAULT ⚡';
+      let waveBannerSub = 'Blast alien ships & shoot bombs before they detonate!';
+
+      // Accuracy Tracking
+      let shotsFired = 0;
+      let shotsHit = 0;
+
+      // Challenge Round Tracking (Every 3rd wave: 3, 6, 9...)
+      let challengeTargetsTotal = 18;
+      let challengeTargetsHit = 0;
+      let challengeEndTime = 0;
 
       interface Invader {
+        id: number;
         x: number;
         y: number;
-        row: number;
-        col: number;
+        gridRow: number;
+        gridCol: number;
         alive: boolean;
-        type: 'mothership' | 'crab' | 'stinger';
+        type: 'mothership' | 'crab' | 'stinger' | 'bomber' | 'interceptor' | 'quantum' | 'plasma_titan' | 'phantom_raider' | 'comet_striker' | 'phoenix' | 'aero_dart' | 'solar_orb';
+        name: string;
         points: number;
+        color: string;
+        accentColor: string;
+        canBomb: boolean;
+        // Divebombing mechanics (Galaga-style)
+        isDivebombing: boolean;
+        diveStartX: number;
+        diveStartY: number;
+        diveProgress: number; // 0 to 1
+        diveSpeed: number;
+        diveSide: number; // 1 or -1
+        diveHasShot: boolean;
+        // Challenge Stage Acrobatic Movement
+        isChallengeTarget?: boolean;
+        challengeSquad?: number;
+        challengeFlightTime?: number;
+        challengeBaseY?: number;
+        challengeDir?: number;
       }
 
-      const types: ('mothership' | 'crab' | 'stinger')[] = ['mothership', 'crab', 'stinger'];
-      const pointValues = [200, 150, 100];
-
-      // Clean grid spawn helper (Fixes bug where all ships spawned on the same starting line)
-      const spawnWaveInvaders = (wave: number): Invader[] => {
+      // Spawn Fleet or Challenge Squad
+      const spawnWaveFleet = (wave: number): Invader[] => {
         const list: Invader[] = [];
+        const isChallenge = isChallengeRound(wave);
+
+        if (isChallenge) {
+          challengeTargetsHit = 0;
+          challengeTargetsTotal = 18;
+          challengeEndTime = 0;
+          // Challenge Stage: 18 acrobatic drones across 3 squads
+          const configs = getWaveShipConfigs(wave);
+          const squadConfigs = [configs.row0, configs.row1, configs.row2];
+
+          for (let squad = 0; squad < 3; squad++) {
+            const conf = squadConfigs[squad];
+            for (let i = 0; i < 6; i++) {
+              list.push({
+                id: squad * 6 + i,
+                x: squad % 2 === 0 ? -40 - i * 45 : canvas.width + 40 + i * 45,
+                y: 50 + squad * 45,
+                gridRow: squad,
+                gridCol: i,
+                alive: true,
+                type: conf.type,
+                name: conf.name,
+                points: conf.points,
+                color: conf.color,
+                accentColor: conf.accentColor,
+                canBomb: false,
+                isDivebombing: false,
+                diveStartX: 0,
+                diveStartY: 0,
+                diveProgress: 0,
+                diveSpeed: 0.008,
+                diveSide: 1,
+                diveHasShot: false,
+                isChallengeTarget: true,
+                challengeSquad: squad,
+                challengeFlightTime: -squad * 1400 - i * 180, // Staggered entry
+                challengeBaseY: 65 + squad * 55,
+                challengeDir: squad % 2 === 0 ? 1 : -1
+              });
+            }
+          }
+          return list;
+        }
+
+        // Regular Combat Fleet (3 distinct rows of 6 ships)
+        const rowConfigs = getWaveShipConfigs(wave);
+        const configs = [rowConfigs.row0, rowConfigs.row1, rowConfigs.row2];
+        const waveScale = Math.pow(1.10, wave - 1);
+
         for (let r = 0; r < 3; r++) {
+          const cfg = configs[r];
           for (let c = 0; c < 6; c++) {
             list.push({
+              id: r * 6 + c,
               x: 55 + c * 82,
               y: 45 + r * 44, // Distinct 3-row grid: y = 45, 89, 133
-              row: r,
-              col: c,
+              gridRow: r,
+              gridCol: c,
               alive: true,
-              type: types[r],
-              points: Math.round(pointValues[r] * Math.pow(1.10, wave - 1))
+              type: cfg.type,
+              name: cfg.name,
+              points: Math.round(cfg.points * waveScale),
+              color: cfg.color,
+              accentColor: cfg.accentColor,
+              canBomb: cfg.canBomb,
+              isDivebombing: false,
+              diveStartX: 0,
+              diveStartY: 0,
+              diveProgress: 0,
+              diveSpeed: 0.007,
+              diveSide: 1,
+              diveHasShot: false
             });
           }
         }
         return list;
       };
 
-      let invaders: Invader[] = spawnWaveInvaders(1);
+      let invaders: Invader[] = spawnWaveFleet(1);
       let fleetDirection = 1;
+
+      // Draw Invader Helper with 11 Retro Vector Art Sprites
+      const renderInvaderSprite = (inv: Invader, cx: number, cy: number, timeVal: number) => {
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Tilt sprite slightly if divebombing before reaching 2/3 distance
+        if (inv.isDivebombing) {
+          if (cy < 280) {
+            const bankAngle = Math.max(-0.35, Math.min(0.35, (playerX - cx) * 0.0035));
+            ctx.rotate(bankAngle);
+          }
+          // Once cy >= 280 (2/3 distance), angle is 0 (pointing straight down)
+        }
+
+        if (inv.type === 'mothership') {
+          // Command Cruiser UFO
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.ellipse(0, 0, 18, 9, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.beginPath();
+          ctx.arc(0, -3, 5, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#06b6d4';
+          ctx.fillRect(-17, -3, 4, 7);
+          ctx.fillRect(13, -3, 4, 7);
+        } else if (inv.type === 'crab') {
+          // Alien Crab Scout
+          const clawOffset = Math.sin(timeVal * 0.007) * 3;
+          ctx.fillStyle = inv.color;
+          ctx.fillRect(-11, -7, 22, 14);
+          ctx.fillRect(-9, -12, 3, 6);
+          ctx.fillRect(6, -12, 3, 6);
+          ctx.fillRect(-17 - clawOffset, -4, 6, 10);
+          ctx.fillRect(11 + clawOffset, -4, 6, 10);
+          ctx.fillStyle = inv.accentColor;
+          ctx.fillRect(-7, -2, 4, 4);
+          ctx.fillRect(3, -2, 4, 4);
+        } else if (inv.type === 'stinger') {
+          // Stinger Fighter
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 12);
+          ctx.lineTo(-15, -9);
+          ctx.lineTo(15, -9);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.beginPath();
+          ctx.arc(0, -2, 4, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (inv.type === 'bomber') {
+          // Heavy Dreadnought Bomber (Orange/Crimson armored hull + glowing bomb bay)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(-18, -8);
+          ctx.lineTo(18, -8);
+          ctx.lineTo(14, 8);
+          ctx.lineTo(6, 13);
+          ctx.lineTo(-6, 13);
+          ctx.lineTo(-14, 8);
+          ctx.closePath();
+          ctx.fill();
+          // Glowing Bomb Bay core
+          ctx.fillStyle = inv.accentColor;
+          ctx.beginPath();
+          ctx.arc(0, 3, 5 + Math.sin(timeVal * 0.01) * 1.5, 0, Math.PI * 2);
+          ctx.fill();
+          // Wing pylons
+          ctx.fillStyle = '#f87171';
+          ctx.fillRect(-18, -3, 4, 8);
+          ctx.fillRect(14, -3, 4, 8);
+        } else if (inv.type === 'interceptor') {
+          // Stealth Interceptor (Violet chevron stealth wings)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 14);
+          ctx.lineTo(17, -11);
+          ctx.lineTo(7, -6);
+          ctx.lineTo(0, -11);
+          ctx.lineTo(-7, -6);
+          ctx.lineTo(-17, -11);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.fillRect(-2, -3, 4, 9);
+        } else if (inv.type === 'quantum') {
+          // Quantum Swarmer (Hexagonal electric drone)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          for (let a = 0; a < 6; a++) {
+            const ang = (a * Math.PI) / 3;
+            const px = Math.cos(ang) * 12;
+            const py = Math.sin(ang) * 12;
+            if (a === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          }
+          ctx.closePath();
+          ctx.fill();
+          ctx.strokeStyle = inv.accentColor;
+          ctx.lineWidth = 2;
+          ctx.stroke();
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (inv.type === 'plasma_titan') {
+          // Plasma Titan (Heavy battlecruiser with ruby plasma exhausts)
+          ctx.fillStyle = inv.color;
+          ctx.fillRect(-16, -9, 32, 12);
+          ctx.fillRect(-10, 3, 20, 8);
+          ctx.fillStyle = inv.accentColor;
+          ctx.fillRect(-6, -14, 12, 6);
+          ctx.fillStyle = '#facc15';
+          ctx.fillRect(-14, 4, 3, 6);
+          ctx.fillRect(11, 4, 3, 6);
+        } else if (inv.type === 'phantom_raider') {
+          // Phantom Raider (Neon cyan & indigo delta wing)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 13);
+          ctx.lineTo(19, -4);
+          ctx.lineTo(12, -10);
+          ctx.lineTo(-12, -10);
+          ctx.lineTo(-19, -4);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.beginPath();
+          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (inv.type === 'comet_striker') {
+          // Comet Striker (White razor dart)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 14);
+          ctx.lineTo(-13, -11);
+          ctx.lineTo(0, -6);
+          ctx.lineTo(13, -11);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.fillRect(-2, -5, 4, 11);
+        } else if (inv.type === 'phoenix') {
+          // Golden Phoenix (Challenge Stage target)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 14);
+          ctx.lineTo(18, -6);
+          ctx.lineTo(12, -12);
+          ctx.lineTo(4, -7);
+          ctx.lineTo(0, -12);
+          ctx.lineTo(-4, -7);
+          ctx.lineTo(-12, -12);
+          ctx.lineTo(-18, -6);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.beginPath();
+          ctx.arc(0, -1, 4.5, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (inv.type === 'aero_dart') {
+          // Aero Dart (Challenge Stage target)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.moveTo(0, 15);
+          ctx.lineTo(14, -10);
+          ctx.lineTo(0, -4);
+          ctx.lineTo(-14, -10);
+          ctx.closePath();
+          ctx.fill();
+          ctx.fillStyle = inv.accentColor;
+          ctx.fillRect(-2, 0, 4, 8);
+        } else {
+          // Solar Energy Orb (Challenge Stage target)
+          ctx.fillStyle = inv.color;
+          ctx.beginPath();
+          ctx.arc(0, 0, 10, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = inv.accentColor;
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.arc(0, 0, 14, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(0, 0, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        ctx.restore();
+      };
 
       const loop = (time: number) => {
         // Clear
@@ -190,7 +486,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
         // Starfield
         ctx.fillStyle = '#ffffff';
-        for (let i = 0; i < 28; i++) {
+        for (let i = 0; i < 30; i++) {
           const sx = (Math.sin(i * 99 + time * 0.001) * 0.5 + 0.5) * canvas.width;
           const sy = ((time * 0.08 + i * 40) % canvas.height);
           ctx.fillRect(sx, sy, 2, 2);
@@ -198,9 +494,10 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
         // Wave speed scaling: 10% faster each round
         const speedScale = Math.pow(1.10, currentWave - 1);
-        const invaderMoveSpeed = 1.0 * speedScale;
-        const alienShotInterval = Math.max(350, 1400 / speedScale);
-        const alienLaserSpeed = 3.2 * speedScale;
+        const invaderMoveSpeed = 1.05 * speedScale;
+        const alienShotInterval = Math.max(340, 1350 / speedScale);
+        const alienLaserSpeed = 3.3 * speedScale;
+        const isChallenge = isChallengeRound(currentWave);
 
         // Player Controls
         if (keysPressed.current['ArrowLeft'] || keysPressed.current['a'] || keysPressed.current['TouchLeft']) {
@@ -211,17 +508,72 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         }
         if ((keysPressed.current[' '] || keysPressed.current['TouchAction']) && time - lastShot > 200) {
           bullets.push({ x: playerX, y: playerY - 15, active: true });
+          shotsFired++;
           lastShot = time;
           handleSound('click');
         }
 
-        // Alien shooting (10% faster frequency each round)
-        if (time - lastAlienShot > alienShotInterval) {
-          const livingInvaders = invaders.filter(i => i.alive);
-          if (livingInvaders.length > 0) {
-            const shooter = livingInvaders[Math.floor(Math.random() * livingInvaders.length)];
-            alienLasers.push({ x: shooter.x, y: shooter.y + 14, active: true, vy: alienLaserSpeed });
-            lastAlienShot = time;
+        // Live Accuracy calculation
+        const currentAccuracy = calculateInvaderAccuracy(shotsFired, shotsHit);
+        if (Math.floor(time / 200) % 5 === 0) {
+          setInvaderAccuracy(currentAccuracy);
+        }
+
+        // Regular Wave: Alien Shooting & Bomb Dropping
+        if (!isChallenge) {
+          // Alien Lasers
+          if (time - lastAlienShot > alienShotInterval) {
+            const livingInvaders = invaders.filter(i => i.alive);
+            if (livingInvaders.length > 0) {
+              const shooter = livingInvaders[Math.floor(Math.random() * livingInvaders.length)];
+              alienLasers.push({ x: shooter.x, y: shooter.y + 14, active: true, vy: alienLaserSpeed });
+              lastAlienShot = time;
+            }
+          }
+
+          // Alien Bombs (Dropped by bombers and motherships, or random fleet units)
+          const bombInterval = Math.max(1200, 3200 / speedScale);
+          if (time - lastBombDrop > bombInterval) {
+            const bombDroppers = invaders.filter(i => i.alive && (i.canBomb || i.gridRow === 0));
+            const candidatePool = bombDroppers.length > 0 ? bombDroppers : invaders.filter(i => i.alive);
+            if (candidatePool.length > 0) {
+              const bomber = candidatePool[Math.floor(Math.random() * candidatePool.length)];
+              alienBombs.push({
+                id: Math.random(),
+                x: bomber.x,
+                y: bomber.y + 12,
+                vy: 2.1 * speedScale,
+                radius: 7,
+                fuse: 0,
+                active: true
+              });
+              lastBombDrop = time + Math.random() * 400;
+            }
+          }
+
+          // Random Divebombing Attacks (A ship from each row peels off at random intervals)
+          const diveInterval = Math.max(2200, 4200 / speedScale);
+          const divebombingCount = invaders.filter(i => i.alive && i.isDivebombing).length;
+          if (divebombingCount < 2 && time - lastDivebombTime > diveInterval) {
+            // Pick an available living ship from any row
+            const availableShips = invaders.filter(i => i.alive && !i.isDivebombing);
+            if (availableShips.length > 0) {
+              // Cycle through rows to ensure all rows divebomb
+              const targetRow = Math.floor(Math.random() * 3);
+              const rowShips = availableShips.filter(i => i.gridRow === targetRow);
+              const diver = rowShips.length > 0
+                ? rowShips[Math.floor(Math.random() * rowShips.length)]
+                : availableShips[Math.floor(Math.random() * availableShips.length)];
+
+              diver.isDivebombing = true;
+              diver.diveStartX = diver.x;
+              diver.diveStartY = diver.y;
+              diver.diveProgress = 0;
+              diver.diveSpeed = invaderMoveSpeed; // Level speed!
+              diver.diveSide = Math.random() > 0.5 ? 1 : -1;
+              diver.diveHasShot = false;
+              lastDivebombTime = time;
+            }
           }
         }
 
@@ -237,6 +589,9 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           ctx.fill();
           ctx.fillStyle = '#fbbf24';
           ctx.fillRect(playerX - 3, playerY - 24, 6, 8);
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(playerX - 14, playerY + 8, 5, 4);
+          ctx.fillRect(playerX + 9, playerY + 8, 5, 4);
         }
 
         // Draw Shield Aura when invulnerable
@@ -250,12 +605,15 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
         // Update & Draw Player Bullets
         ctx.fillStyle = '#38bdf8';
+        ctx.shadowColor = '#0284c7';
+        ctx.shadowBlur = 6;
         bullets.forEach(b => {
           if (!b.active) return;
-          b.y -= 8.5;
+          b.y -= 8.8;
           ctx.fillRect(b.x - 2, b.y, 4, 14);
           if (b.y < 0) b.active = false;
         });
+        ctx.shadowBlur = 0;
         bullets = bullets.filter(b => b.active);
 
         // Update & Draw Alien Lasers
@@ -272,6 +630,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
             setLives(localLives);
             playerInvulnerableUntil = time + 1800;
             handleSound('wrong');
+            explosions.push({ x: playerX, y: playerY, radius: 8, maxRadius: 36, color: '#f43f5e', life: 1.0 });
             if (localLives <= 0) {
               triggerGameOver();
               return;
@@ -281,6 +640,145 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         });
         alienLasers = alienLasers.filter(al => al.active);
 
+        // Update, Collide & Draw Alien Bombs (SHOOTABLE & EXPLOSIVE!)
+        alienBombs.forEach(bomb => {
+          if (!bomb.active) return;
+          bomb.y += bomb.vy;
+          bomb.fuse += 0.05;
+
+          // 1. Check if PLAYER BULLET hits bomb -> Mid-air detonation!
+          bullets.forEach(b => {
+            if (b.active && Math.hypot(b.x - bomb.x, b.y - bomb.y) < bomb.radius + 7) {
+              b.active = false;
+              bomb.active = false;
+              shotsHit++;
+              localScore += 100;
+              setCurrentScore(localScore);
+              handleSound('star');
+              floatTexts.push({ text: 'BOMB DEFUSED! +100', x: bomb.x, y: bomb.y - 12, color: '#f59e0b', life: 1.0, vy: -1.2 });
+
+              // Create mid-air shockwave explosion with area-of-effect chain reaction!
+              explosions.push({
+                x: bomb.x,
+                y: bomb.y,
+                radius: 8,
+                maxRadius: 46,
+                color: '#fbbf24',
+                life: 1.0,
+                isMidAir: true
+              });
+            }
+          });
+
+          // 2. Check if bomb hits ground -> Explodes at bottom
+          if (bomb.active && bomb.y >= canvas.height - 18) {
+            bomb.active = false;
+            explosions.push({ x: bomb.x, y: canvas.height - 15, radius: 6, maxRadius: 38, color: '#ea580c', life: 1.0 });
+            handleSound('wrong');
+
+            // Ground blast damage to player if close
+            if (!isShielded && Math.abs(bomb.x - playerX) < 36 && Math.abs(canvas.height - 15 - playerY) < 32) {
+              localLives--;
+              setLives(localLives);
+              playerInvulnerableUntil = time + 1800;
+              if (localLives <= 0) {
+                triggerGameOver();
+                return;
+              }
+            }
+          }
+
+          // 3. Direct hit on player
+          if (bomb.active && !isShielded && Math.abs(bomb.x - playerX) < 22 && Math.abs(bomb.y - playerY) < 18) {
+            bomb.active = false;
+            localLives--;
+            setLives(localLives);
+            playerInvulnerableUntil = time + 1800;
+            handleSound('wrong');
+            explosions.push({ x: playerX, y: playerY, radius: 10, maxRadius: 40, color: '#ef4444', life: 1.0 });
+            if (localLives <= 0) {
+              triggerGameOver();
+              return;
+            }
+          }
+
+          // 4. Render Alien Bomb (Mechanical ticking mine with blinking fuse spark)
+          if (bomb.active) {
+            ctx.save();
+            ctx.translate(bomb.x, bomb.y);
+
+            // Blinking fuse flame
+            const sparkColor = Math.sin(time * 0.02) > 0 ? '#facc15' : '#ef4444';
+            ctx.fillStyle = sparkColor;
+            ctx.beginPath();
+            ctx.arc(0, -bomb.radius - 3, 2.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Bomb main metallic casing
+            ctx.fillStyle = '#334155';
+            ctx.beginPath();
+            ctx.arc(0, 0, bomb.radius, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.strokeStyle = '#f97316';
+            ctx.lineWidth = 1.8;
+            ctx.stroke();
+
+            // Pulsing core
+            ctx.fillStyle = Math.sin(time * 0.015) > 0 ? '#ef4444' : '#f59e0b';
+            ctx.beginPath();
+            ctx.arc(0, 0, bomb.radius * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+          }
+        });
+        alienBombs = alienBombs.filter(b => b.active);
+
+        // Update & Render Explosions (Handles chain reactions on enemies!)
+        explosions.forEach(exp => {
+          exp.radius += (exp.maxRadius - exp.radius) * 0.15;
+          exp.life -= 0.04;
+
+          // Mid-Air Detonation Chain Reaction: destroys nearby invaders caught in blast!
+          if (exp.isMidAir && exp.life > 0.6) {
+            invaders.forEach(inv => {
+              if (inv.alive && Math.hypot(inv.x - exp.x, inv.y - exp.y) < exp.radius + 12) {
+                inv.alive = false;
+                shotsHit++;
+                localScore += inv.points;
+                setCurrentScore(localScore);
+                floatTexts.push({ text: `BLAST POP! +${inv.points}`, x: inv.x, y: inv.y - 10, color: '#38bdf8', life: 1.0, vy: -1.0 });
+              }
+            });
+            // Also detonates nearby bombs in chain reaction
+            alienBombs.forEach(otherBomb => {
+              if (otherBomb.active && Math.hypot(otherBomb.x - exp.x, otherBomb.y - exp.y) < exp.radius + 8) {
+                otherBomb.active = false;
+                shotsHit++;
+                localScore += 100;
+                setCurrentScore(localScore);
+                floatTexts.push({ text: 'CHAIN DEFUSED! +100', x: otherBomb.x, y: otherBomb.y, color: '#eab308', life: 1.0, vy: -1.2 });
+              }
+            });
+          }
+
+          // Render Explosion Shockwave
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, exp.life);
+          ctx.strokeStyle = exp.color;
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(exp.x, exp.y, exp.radius, 0, Math.PI * 2);
+          ctx.stroke();
+
+          ctx.fillStyle = exp.color;
+          ctx.beginPath();
+          ctx.arc(exp.x, exp.y, exp.radius * 0.45, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        });
+        explosions = explosions.filter(e => e.life > 0);
+
         // Update & Draw Alien Spaceships
         let hitEdge = false;
         let aliveCount = 0;
@@ -288,104 +786,230 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         invaders.forEach(inv => {
           if (!inv.alive) return;
           aliveCount++;
-          inv.x += fleetDirection * invaderMoveSpeed;
-          if (inv.x > canvas.width - 35 || inv.x < 35) hitEdge = true;
 
-          // Check bullet hit on alien
+          if (isChallenge) {
+            // CHALLENGE ROUND: Acrobatic Flight Patterns across the screen
+            inv.challengeFlightTime = (inv.challengeFlightTime || 0) + 16 * speedScale;
+            if (inv.challengeFlightTime > 0) {
+              const t = inv.challengeFlightTime * 0.0022;
+              const baseY = inv.challengeBaseY || 80;
+              // Acrobatic sinusoidal swoop across the screen
+              inv.x += (inv.challengeDir || 1) * 2.8 * speedScale;
+              inv.y = baseY + Math.sin(t * 4) * 45;
+
+              // If flies off screen, loop back across
+              if (inv.challengeDir === 1 && inv.x > canvas.width + 50) {
+                inv.x = -40;
+              } else if (inv.challengeDir === -1 && inv.x < -50) {
+                inv.x = canvas.width + 40;
+              }
+            }
+          } else if (inv.isDivebombing) {
+            // DIVEBOMBING ATTACK:
+            // 1. Move only as fast as the level speed (invaderMoveSpeed) so the player has time to aim and shoot
+            // 2. Track/pursue the player in the top 2/3 of the screen (y < 280)
+            // 3. Once at 2/3 screen distance (y >= 280), movement goes straight down and no longer chases player
+            const twoThirdsScreen = canvas.height * (2 / 3); // 280px in 420px canvas
+            const diveVy = invaderMoveSpeed; // vertical descent rate matches level speed
+
+            inv.y += diveVy;
+
+            if (inv.y < twoThirdsScreen) {
+              // Pursue player horizontally at gentle speed not exceeding level speed
+              const dx = playerX - inv.x;
+              if (Math.abs(dx) > 3) {
+                const trackSpeed = Math.min(Math.abs(dx) * 0.035, invaderMoveSpeed * 0.75);
+                inv.x += Math.sign(dx) * trackSpeed;
+              }
+            }
+            // Once inv.y >= twoThirdsScreen, inv.x remains constant (plunges straight down!)
+
+            // Divebomber drops a bomb or shoots mid-flight (between 160px and 240px down)
+            if (!inv.diveHasShot && inv.y >= 160 && inv.y <= 240) {
+              inv.diveHasShot = true;
+              if (inv.canBomb) {
+                alienBombs.push({ id: Math.random(), x: inv.x, y: inv.y + 10, vy: 2.2 * speedScale, radius: 7, fuse: 0, active: true });
+              } else {
+                alienLasers.push({ x: inv.x, y: inv.y + 10, active: true, vy: alienLaserSpeed * 1.05 });
+              }
+            }
+
+            // Once the divebomber passes completely off the bottom of the screen, return to formation
+            if (inv.y > canvas.height + 25) {
+              inv.isDivebombing = false;
+              inv.diveHasShot = false;
+              const sameRow = invaders.find(i => i.alive && !i.isDivebombing && i.gridRow === inv.gridRow && i.id !== inv.id);
+              if (sameRow) {
+                inv.y = sameRow.y;
+                inv.x = Math.max(35, Math.min(canvas.width - 35, sameRow.x + (inv.gridCol - sameRow.gridCol) * 82));
+              } else {
+                inv.y = 45 + inv.gridRow * 44;
+                inv.x = 55 + inv.gridCol * 82;
+              }
+            }
+          } else {
+            // Standard Grid Formation Movement
+            inv.x += fleetDirection * invaderMoveSpeed;
+            if (inv.x > canvas.width - 35 || inv.x < 35) hitEdge = true;
+          }
+
+          // Check Bullet Hit on Alien
           bullets.forEach(b => {
-            if (b.active && Math.abs(b.x - inv.x) < 24 && Math.abs(b.y - inv.y) < 16) {
+            if (b.active && Math.abs(b.x - inv.x) < 24 && Math.abs(b.y - inv.y) < 18) {
               b.active = false;
               inv.alive = false;
-              localScore += inv.points;
+              shotsHit++;
+
+              // DIVE KILL BONUS (2x Points!)
+              const earnedPts = inv.isDivebombing ? inv.points * 2 : inv.points;
+              localScore += earnedPts;
               setCurrentScore(localScore);
-              handleSound('correct');
+
+              if (inv.isDivebombing) {
+                handleSound('star');
+                floatTexts.push({ text: `DIVE KILL! +${earnedPts}`, x: inv.x, y: inv.y - 12, color: '#f43f5e', life: 1.2, vy: -1.3 });
+              } else {
+                handleSound('correct');
+                floatTexts.push({ text: `+${earnedPts}`, x: inv.x, y: inv.y - 10, color: '#38bdf8', life: 0.9, vy: -1.0 });
+              }
+
+              if (isChallenge) {
+                challengeTargetsHit++;
+              }
+
+              // Visual explosion
+              explosions.push({ x: inv.x, y: inv.y, radius: 6, maxRadius: 28, color: inv.color, life: 0.8 });
             }
           });
 
-          // Check bottom crash or player collision
-          if (!isShielded && (inv.y > playerY - 14 || (Math.abs(inv.x - playerX) < 26 && Math.abs(inv.y - playerY) < 18))) {
+          // Check Collision with Player:
+          // Direct physical hit on player ship, OR standard fleet descent reaching base line (only for non-divebombing fleet)
+          const isDirectHit = Math.abs(inv.x - playerX) < 24 && Math.abs(inv.y - playerY) < 18;
+          const isFleetInvasion = !inv.isDivebombing && inv.y > playerY - 12;
+
+          if (!isShielded && (isDirectHit || isFleetInvasion)) {
             inv.alive = false;
             localLives--;
             setLives(localLives);
             playerInvulnerableUntil = time + 1800;
             handleSound('wrong');
+            explosions.push({ x: playerX, y: playerY, radius: 10, maxRadius: 40, color: '#ef4444', life: 1.0 });
             if (localLives <= 0) {
               triggerGameOver();
               return;
             }
           }
 
-          // RENDER ALIEN SPACESHIP (Differentiated retro sprites)
-          if (inv.type === 'mothership') {
-            // 1. Mothership Cruiser
-            ctx.fillStyle = '#ec4899';
-            ctx.beginPath();
-            ctx.ellipse(inv.x, inv.y, 18, 9, 0, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#facc15';
-            ctx.beginPath();
-            ctx.arc(inv.x, inv.y - 3, 5, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.fillStyle = '#06b6d4';
-            ctx.fillRect(inv.x - 17, inv.y - 3, 4, 7);
-            ctx.fillRect(inv.x + 13, inv.y - 3, 4, 7);
-          } else if (inv.type === 'crab') {
-            // 2. Alien Crab Scout
-            const clawOffset = Math.sin(time * 0.007) * 3;
-            ctx.fillStyle = '#06b6d4';
-            ctx.fillRect(inv.x - 11, inv.y - 7, 22, 14);
-            ctx.fillRect(inv.x - 9, inv.y - 12, 3, 6);
-            ctx.fillRect(inv.x + 6, inv.y - 12, 3, 6);
-            ctx.fillRect(inv.x - 17 - clawOffset, inv.y - 4, 6, 10);
-            ctx.fillRect(inv.x + 11 + clawOffset, inv.y - 4, 6, 10);
-            ctx.fillStyle = '#ef4444';
-            ctx.fillRect(inv.x - 7, inv.y - 2, 4, 4);
-            ctx.fillRect(inv.x + 3, inv.y - 2, 4, 4);
-          } else {
-            // 3. Alien Stinger Fighter
-            ctx.fillStyle = '#10b981';
-            ctx.beginPath();
-            ctx.moveTo(inv.x, inv.y + 11);
-            ctx.lineTo(inv.x - 15, inv.y - 9);
-            ctx.lineTo(inv.x + 15, inv.y - 9);
-            ctx.closePath();
-            ctx.fill();
-            ctx.fillStyle = '#fbbf24';
-            ctx.beginPath();
-            ctx.arc(inv.x, inv.y - 2, 4, 0, Math.PI * 2);
-            ctx.fill();
-          }
+          // Render Alien Spaceship Sprite
+          renderInvaderSprite(inv, inv.x, inv.y, time);
         });
 
-        // Drop down fleet on boundary bounce
-        if (hitEdge) {
+        // Fleet Bounce & Drop (Standard Waves)
+        if (hitEdge && !isChallenge) {
           fleetDirection *= -1;
-          invaders.forEach(inv => { inv.y += 8; });
+          invaders.forEach(inv => {
+            if (!inv.isDivebombing) inv.y += 8;
+          });
         }
 
-        // NEXT WAVE PROGRESSION (+10% Speed & Shooting, clean 3-row grid respawn)
+        // Floating Text Animation
+        floatTexts.forEach(ft => {
+          ft.y += ft.vy;
+          ft.life -= 0.025;
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, ft.life);
+          ctx.fillStyle = ft.color;
+          ctx.font = 'bold 12px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(ft.text, ft.x, ft.y);
+          ctx.restore();
+        });
+        floatTexts = floatTexts.filter(ft => ft.life > 0);
+
+        // NEXT WAVE PROGRESSION & ACCURACY BONUS EVALUATION
         if (aliveCount === 0 && !isEnded) {
-          currentWave++;
-          setWaveNumber(currentWave);
+          // 1. Evaluate Shooting Accuracy Bonus (>70% triggers big bonus!)
+          const finalRoundAccuracy = calculateInvaderAccuracy(shotsFired, shotsHit);
+          const accuracyBonus = getInvaderAccuracyBonus(finalRoundAccuracy, currentWave);
+
+          let bonusNotice = '';
+          if (finalRoundAccuracy >= 70 && accuracyBonus > 0) {
+            localScore += accuracyBonus;
+            bonusNotice = `🎯 ACCURACY BONUS: ${finalRoundAccuracy}% (+${accuracyBonus} PTS)!`;
+            handleSound('victory');
+          } else {
+            handleSound('star');
+          }
+
+          // 2. Challenge Stage Bonus
+          if (isChallenge) {
+            const chBonus = getChallengeStageBonus(challengeTargetsHit, challengeTargetsTotal);
+            localScore += chBonus.points;
+            bonusNotice += ` ${chBonus.label} (+${chBonus.points} PTS)`;
+          }
+
+          // Wave Completion Base Points
           localScore += 600 * currentWave;
           setCurrentScore(localScore);
-          handleSound('star');
-          invaders = spawnWaveInvaders(currentWave);
-          waveBannerTime = time + 2000;
+
+          // Advance to next wave
+          currentWave++;
+          setWaveNumber(currentWave);
+
+          // Reset wave trackers
+          invaders = spawnWaveFleet(currentWave);
           fleetDirection = 1;
+          waveBannerTime = time + 2600;
+
+          if (isChallengeRound(currentWave)) {
+            waveBannerText = `⭐ CHALLENGE STAGE: WAVE ${currentWave} ⭐`;
+            waveBannerSub = 'SPEED & ACCURACY TEST! 18 ACROBATIC TARGETS • DO NOT FIRE BACK!';
+          } else {
+            const shipNames = getWaveShipConfigs(currentWave);
+            waveBannerText = `⚡ WAVE ${currentWave} • ${shipNames.row0.name.toUpperCase()} SQUADRON ⚡`;
+            waveBannerSub = bonusNotice ? bonusNotice : `+10% SPEED • SHOOT BOMBS & DIVEBOMBERS!`;
+          }
         }
 
-        // HUD: Wave Banner
+        // HUD: Top Bar Stats
         ctx.fillStyle = '#94a3b8';
         ctx.font = 'bold 11px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(`ROUND / WAVE ${currentWave} (+${Math.round((speedScale - 1) * 100)}% SPD)`, 15, 20);
+        if (isChallenge) {
+          ctx.fillStyle = '#fbbf24';
+          ctx.fillText(`⭐ CHALLENGE ROUND ${currentWave} • TARGETS: ${challengeTargetsHit}/${challengeTargetsTotal}`, 15, 20);
+        } else {
+          ctx.fillText(`ROUND / WAVE ${currentWave} (+${Math.round((speedScale - 1) * 100)}% SPD)`, 15, 20);
+        }
 
+        // Top Right: Live Accuracy Display
+        ctx.textAlign = 'right';
+        if (currentAccuracy >= 70) {
+          ctx.fillStyle = '#10b981';
+          ctx.fillText(`🎯 ACCURACY: ${currentAccuracy}% (>70% BONUS ACTIVE)`, canvas.width - 15, 20);
+        } else {
+          ctx.fillStyle = '#f59e0b';
+          ctx.fillText(`ACCURACY: ${currentAccuracy}% (70% GOAL)`, canvas.width - 15, 20);
+        }
+
+        // Centered Wave Announcement Banner
         if (time < waveBannerTime) {
-          ctx.fillStyle = 'rgba(245, 158, 11, 0.9)';
-          ctx.font = 'black 22px sans-serif';
+          ctx.save();
+          ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
+          ctx.fillRect(40, 60, canvas.width - 80, 68);
+          ctx.strokeStyle = isChallenge ? '#f59e0b' : '#38bdf8';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(40, 60, canvas.width - 80, 68);
+
+          ctx.fillStyle = isChallenge ? '#fbbf24' : '#f59e0b';
+          ctx.font = 'black 18px sans-serif';
           ctx.textAlign = 'center';
-          ctx.fillText(`⚡ WAVE ${currentWave} • 10% FASTER! ⚡`, canvas.width / 2, 90);
+          ctx.fillText(waveBannerText, canvas.width / 2, 88);
+
+          ctx.fillStyle = '#f8fafc';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.fillText(waveBannerSub, canvas.width / 2, 112);
+          ctx.restore();
         }
 
         if (!isEnded) gameLoopRef.current = requestAnimationFrame(loop);
@@ -1937,6 +2561,21 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
               ))}
             </div>
 
+            {/* Space Invaders Live Accuracy Indicator */}
+            {activeGameId === 'space_invaders' && (
+              <div className="flex items-center gap-1 text-[11px] font-bold">
+                <Target className="w-3.5 h-3.5 text-emerald-400" />
+                <span className={invaderAccuracy >= 70 ? 'text-emerald-400 font-extrabold' : 'text-slate-300'}>
+                  Acc: {invaderAccuracy}% {invaderAccuracy >= 70 ? '🎯' : ''}
+                </span>
+                {isChallengeRound(waveNumber) && (
+                  <span className="px-1.5 py-0.2 rounded-md bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] animate-pulse">
+                    ⭐ Challenge
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center gap-1 text-[11px] text-amber-300 font-bold">
               <Trophy className="w-3.5 h-3.5 text-amber-400" />
               <span>Best: {Math.max(scores[activeGameId] || 0, currentScore)}</span>
@@ -2124,6 +2763,19 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
               })()}
             </div>
           </div>
+
+          {/* Space Invaders Strategy Guide Bar */}
+          {activeGameId === 'space_invaders' && (
+            <div className="w-full max-w-xl flex items-center justify-between gap-1.5 px-3 py-1 bg-slate-950/90 border border-slate-800 rounded-xl text-xs shrink-0 mt-1">
+              <div className="flex items-center gap-1.5 text-[11px] truncate">
+                <span className="text-amber-400 font-bold">Tactics:</span>
+                <span className="text-slate-300">💣 Shoot falling bombs (+100★ & area blast!) • 🎯 &gt;70% Acc = Bonus • Dive Kills = 2x Pts</span>
+              </div>
+              <div className="flex items-center gap-1 text-[11px] shrink-0 font-bold text-sky-400">
+                <span>Wave {waveNumber}</span>
+              </div>
+            </div>
+          )}
 
           {/* Outrun Road Guide Bar (when Outrun is active) */}
           {activeGameId === 'outrun' && (

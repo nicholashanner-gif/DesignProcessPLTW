@@ -19,6 +19,11 @@ import {
   canPlayArcadeGame,
   getRemainingArcadePlays,
   isStageFullyCompleted,
+  calculateInvaderAccuracy,
+  getInvaderAccuracyBonus,
+  isChallengeRound,
+  getChallengeStageBonus,
+  getWaveShipConfigs,
   LevelProgress
 } from './designQuestRules';
 import { ALL_LEVELS } from '../data/levelsData';
@@ -189,4 +194,69 @@ test('isStageFullyCompleted accurately detects when all levels in a stage have a
   assert.equal(isStageFullyCompleted('ask', ALL_LEVELS, completeProgress), true);
   assert.equal(isStageFullyCompleted('research', ALL_LEVELS, completeProgress), false);
 });
+
+test('calculateInvaderAccuracy computes exact integer percentage and handles edge cases', () => {
+  assert.equal(calculateInvaderAccuracy(0, 0), 0);
+  assert.equal(calculateInvaderAccuracy(10, 0), 0);
+  assert.equal(calculateInvaderAccuracy(10, 7), 70);
+  assert.equal(calculateInvaderAccuracy(10, 10), 100);
+  assert.equal(calculateInvaderAccuracy(3, 2), 67);
+  assert.equal(calculateInvaderAccuracy(10, 15), 100); // capped at 100
+});
+
+test('getInvaderAccuracyBonus awards zero below 70% and substantial bonus at or above 70%', () => {
+  assert.equal(getInvaderAccuracyBonus(0, 1), 0);
+  assert.equal(getInvaderAccuracyBonus(69, 1), 0);
+  assert.equal(getInvaderAccuracyBonus(70, 1), 500);
+  assert.equal(getInvaderAccuracyBonus(80, 1), 750);
+  assert.equal(getInvaderAccuracyBonus(100, 1), 1250);
+
+  // Scales with wave multiplier
+  const wave2Bonus = getInvaderAccuracyBonus(70, 2);
+  assert.ok(wave2Bonus > 500, `Expected wave 2 bonus > 500, got ${wave2Bonus}`);
+});
+
+test('isChallengeRound correctly identifies every 3rd level', () => {
+  assert.equal(isChallengeRound(0), false);
+  assert.equal(isChallengeRound(1), false);
+  assert.equal(isChallengeRound(2), false);
+  assert.equal(isChallengeRound(3), true);
+  assert.equal(isChallengeRound(4), false);
+  assert.equal(isChallengeRound(5), false);
+  assert.equal(isChallengeRound(6), true);
+  assert.equal(isChallengeRound(9), true);
+});
+
+test('getChallengeStageBonus awards tiered bonuses based on targets hit', () => {
+  assert.equal(getChallengeStageBonus(0, 18).points, 0);
+  assert.equal(getChallengeStageBonus(18, 18).points, 2500);
+  assert.ok(getChallengeStageBonus(18, 18).label.includes('PERFECT'));
+  assert.equal(getChallengeStageBonus(15, 18).points, 1500);
+  assert.equal(getChallengeStageBonus(11, 18).points, 800);
+  assert.equal(getChallengeStageBonus(6, 18).points, 400);
+});
+
+test('getWaveShipConfigs provides distinct ships across regular and challenge waves', () => {
+  const wave1 = getWaveShipConfigs(1);
+  assert.equal(wave1.row0.type, 'mothership');
+  assert.equal(wave1.row1.type, 'crab');
+  assert.equal(wave1.row2.type, 'stinger');
+  assert.equal(wave1.row0.canBomb, true);
+
+  const wave2 = getWaveShipConfigs(2);
+  assert.equal(wave2.row0.type, 'bomber');
+  assert.equal(wave2.row1.type, 'interceptor');
+  assert.equal(wave2.row2.type, 'quantum');
+  assert.equal(wave2.row0.canBomb, true);
+  assert.ok(wave2.row0.points > wave1.row0.points);
+
+  const wave3 = getWaveShipConfigs(3); // Challenge round!
+  assert.equal(wave3.row0.type, 'phoenix');
+  assert.equal(wave3.row1.type, 'aero_dart');
+  assert.equal(wave3.row2.type, 'solar_orb');
+  // In challenge rounds, enemies do not drop bombs
+  assert.equal(wave3.row0.canBomb, false);
+  assert.equal(wave3.row1.canBomb, false);
+});
+
 
