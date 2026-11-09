@@ -70,6 +70,9 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
   const [tetrisLinesCleared, setTetrisLinesCleared] = useState(0);
   const [archeryDistance, setArcheryDistance] = useState<'near' | 'mid' | 'far'>('mid');
   const [archeryAngle, setArcheryAngle] = useState(42);
+  const [outrunBoostCharges, setOutrunBoostCharges] = useState(0);
+  const [outrunFuelsCount, setOutrunFuelsCount] = useState(0);
+  const [outrunIsBoosting, setOutrunIsBoosting] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const gameLoopRef = useRef<number | null>(null);
@@ -93,6 +96,9 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
     setInvaderAccuracy(100);
     setDigDugTimeLeft(120);
     setTetrisLinesCleared(0);
+    setOutrunBoostCharges(0);
+    setOutrunFuelsCount(0);
+    setOutrunIsBoosting(false);
   };
 
   // Keyboard controls handler
@@ -125,6 +131,12 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
     const canvas = canvasRef.current;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    let canvasDismissTriggered = false;
+    const handleCanvasPointer = () => {
+      canvasDismissTriggered = true;
+    };
+    canvas.addEventListener('pointerdown', handleCanvasPointer);
 
     let localLives = 3;
     let localScore = 0;
@@ -159,9 +171,12 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
       let lastDivebombTime = 0;
       let playerInvulnerableUntil = 1500;
       let currentWave = 1;
-      let waveBannerTime = 2200;
-      let waveBannerText = '⚡ WAVE 1 • ALIEN FLEET ASSAULT ⚡';
-      let waveBannerSub = 'Blast alien ships & shoot bombs before they detonate!';
+      let waveDialogActive = true;
+      let waveDialogStartTime = 0;
+      const WAVE_DIALOG_DURATION = 3200;
+      let waveDialogTitle = '⚡ WAVE 1 • ALIEN FLEET ASSAULT ⚡';
+      let waveDialogSub = 'Blast alien ships & shoot bombs before they detonate!';
+      let waveDialogTip = '🎯 Aim for >70% accuracy for bonus • Divebombers award 2x points!';
 
       // Accuracy Tracking
       let shotsFired = 0;
@@ -498,6 +513,131 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         const alienShotInterval = Math.max(340, 1350 / speedScale);
         const alienLaserSpeed = 3.3 * speedScale;
         const isChallenge = isChallengeRound(currentWave);
+
+        // ========================================================
+        // DIALOG SCREEN: PAUSES THE GAME IN THE BACKGROUND
+        // Game freezes until dialog is dismissed by player or timer!
+        // ========================================================
+        if (waveDialogActive) {
+          if (waveDialogStartTime === 0) {
+            waveDialogStartTime = time;
+          }
+
+          const elapsedDialog = time - waveDialogStartTime;
+          const timeLeftSec = Math.max(0, Math.ceil((WAVE_DIALOG_DURATION - elapsedDialog) / 1000));
+          const progressFraction = Math.min(1, elapsedDialog / WAVE_DIALOG_DURATION);
+
+          const userDismissed =
+            canvasDismissTriggered ||
+            keysPressed.current[' '] ||
+            keysPressed.current['Enter'] ||
+            keysPressed.current['TouchAction'];
+
+          if (userDismissed || elapsedDialog >= WAVE_DIALOG_DURATION) {
+            waveDialogActive = false;
+            canvasDismissTriggered = false;
+            if (keysPressed.current[' ']) keysPressed.current[' '] = false;
+            if (keysPressed.current['TouchAction']) keysPressed.current['TouchAction'] = false;
+            handleSound('star');
+
+            // Grace period: alien shots, bombs, and divebombers don't immediately attack on unpause
+            lastShot = time;
+            lastAlienShot = time + 700;
+            lastBombDrop = time + 1400;
+            lastDivebombTime = time + 2800;
+            playerInvulnerableUntil = time + 1500;
+          } else {
+            // Draw Player Cannon in frozen position
+            ctx.fillStyle = '#f59e0b';
+            ctx.beginPath();
+            ctx.moveTo(playerX, playerY - 18);
+            ctx.lineTo(playerX - 18, playerY + 12);
+            ctx.lineTo(playerX + 18, playerY + 12);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#fbbf24';
+            ctx.fillRect(playerX - 3, playerY - 24, 6, 8);
+            ctx.fillStyle = '#38bdf8';
+            ctx.fillRect(playerX - 14, playerY + 8, 5, 4);
+            ctx.fillRect(playerX + 9, playerY + 8, 5, 4);
+
+            // Draw Alien spaceships in frozen grid formation
+            invaders.forEach(inv => {
+              if (inv.alive) renderInvaderSprite(inv, inv.x, inv.y, time);
+            });
+
+            // Draw Top HUD Bar
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = 'bold 11px sans-serif';
+            ctx.textAlign = 'left';
+            if (isChallenge) {
+              ctx.fillStyle = '#fbbf24';
+              ctx.fillText(`⭐ CHALLENGE ROUND ${currentWave} • TARGETS: ${challengeTargetsHit}/${challengeTargetsTotal}`, 15, 20);
+            } else {
+              ctx.fillText(`ROUND / WAVE ${currentWave} (+${Math.round((speedScale - 1) * 100)}% SPD)`, 15, 20);
+            }
+            ctx.textAlign = 'right';
+            const currentAccuracy = calculateInvaderAccuracy(shotsFired, shotsHit);
+            if (currentAccuracy >= 70) {
+              ctx.fillStyle = '#10b981';
+              ctx.fillText(`🎯 ACCURACY: ${currentAccuracy}% (>70% BONUS ACTIVE)`, canvas.width - 15, 20);
+            } else {
+              ctx.fillStyle = '#f59e0b';
+              ctx.fillText(`ACCURACY: ${currentAccuracy}% (70% GOAL)`, canvas.width - 15, 20);
+            }
+
+            // Draw Dialog Card Screen (Centered, clear, readable, pauses background)
+            ctx.save();
+            ctx.fillStyle = 'rgba(6, 10, 20, 0.72)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const cardW = 470;
+            const cardH = 148;
+            const cardX = (canvas.width - cardW) / 2;
+            const cardY = (canvas.height - cardH) / 2 - 10;
+
+            // Card body & neon border
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.96)';
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = isChallenge ? '#fbbf24' : '#38bdf8';
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+            // Dialog Badge / Wave Title
+            ctx.fillStyle = isChallenge ? '#fbbf24' : '#f59e0b';
+            ctx.font = 'black 17px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(waveDialogTitle, canvas.width / 2, cardY + 34);
+
+            // Subtitle / Mission Brief
+            ctx.fillStyle = '#f8fafc';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(waveDialogSub, canvas.width / 2, cardY + 62);
+
+            // Strategy Pro-Tip
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(waveDialogTip, canvas.width / 2, cardY + 84);
+
+            // Pulsing Dismiss Action Prompt
+            const pulse = Math.sin(time * 0.008) * 0.5 + 0.5;
+            ctx.fillStyle = pulse > 0.4 ? '#38bdf8' : '#7dd3fc';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(`▶ PRESS [SPACE] OR CLICK SCREEN TO START (${timeLeftSec}s)`, canvas.width / 2, cardY + 114);
+
+            // Progress bar
+            ctx.fillStyle = 'rgba(51, 65, 85, 0.6)';
+            ctx.fillRect(cardX + 24, cardY + cardH - 12, cardW - 48, 5);
+            ctx.fillStyle = isChallenge ? '#f59e0b' : '#38bdf8';
+            ctx.fillRect(cardX + 24, cardY + cardH - 12, (cardW - 48) * (1 - progressFraction), 5);
+
+            ctx.restore();
+
+            // Loop continues to animate the dialog prompt, but NO gameplay updates occur!
+            if (!isEnded) gameLoopRef.current = requestAnimationFrame(loop);
+            return;
+          }
+        }
 
         // Player Controls
         if (keysPressed.current['ArrowLeft'] || keysPressed.current['a'] || keysPressed.current['TouchLeft']) {
@@ -956,18 +1096,27 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           currentWave++;
           setWaveNumber(currentWave);
 
-          // Reset wave trackers
+          // Reset wave trackers & clear existing projectiles
           invaders = spawnWaveFleet(currentWave);
           fleetDirection = 1;
-          waveBannerTime = time + 2600;
+          bullets = [];
+          alienLasers = [];
+          alienBombs = [];
+
+          // Activate dialog pause for the next wave
+          waveDialogActive = true;
+          waveDialogStartTime = 0;
+          canvasDismissTriggered = false;
 
           if (isChallengeRound(currentWave)) {
-            waveBannerText = `⭐ CHALLENGE STAGE: WAVE ${currentWave} ⭐`;
-            waveBannerSub = 'SPEED & ACCURACY TEST! 18 ACROBATIC TARGETS • DO NOT FIRE BACK!';
+            waveDialogTitle = `⭐ CHALLENGE STAGE: WAVE ${currentWave} ⭐`;
+            waveDialogSub = 'SPEED & ACCURACY TEST! 18 ACROBATIC TARGETS • DO NOT FIRE BACK!';
+            waveDialogTip = '🎯 Hit targets rapidly for maximum bonus stars! No alien lasers/bombs.';
           } else {
             const shipNames = getWaveShipConfigs(currentWave);
-            waveBannerText = `⚡ WAVE ${currentWave} • ${shipNames.row0.name.toUpperCase()} SQUADRON ⚡`;
-            waveBannerSub = bonusNotice ? bonusNotice : `+10% SPEED • SHOOT BOMBS & DIVEBOMBERS!`;
+            waveDialogTitle = `⚡ WAVE ${currentWave} • ${shipNames.row0.name.toUpperCase()} SQUADRON ⚡`;
+            waveDialogSub = bonusNotice ? bonusNotice : `+10% FLEET SPEED • NEW ALIEN WARSHIPS DETECTED!`;
+            waveDialogTip = '💣 Shoot bombs out of the sky • Dodge divebombers (2x pts for dive kills)!';
           }
         }
 
@@ -990,26 +1139,6 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         } else {
           ctx.fillStyle = '#f59e0b';
           ctx.fillText(`ACCURACY: ${currentAccuracy}% (70% GOAL)`, canvas.width - 15, 20);
-        }
-
-        // Centered Wave Announcement Banner
-        if (time < waveBannerTime) {
-          ctx.save();
-          ctx.fillStyle = 'rgba(9, 13, 22, 0.85)';
-          ctx.fillRect(40, 60, canvas.width - 80, 68);
-          ctx.strokeStyle = isChallenge ? '#f59e0b' : '#38bdf8';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(40, 60, canvas.width - 80, 68);
-
-          ctx.fillStyle = isChallenge ? '#fbbf24' : '#f59e0b';
-          ctx.font = 'black 18px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(waveBannerText, canvas.width / 2, 88);
-
-          ctx.fillStyle = '#f8fafc';
-          ctx.font = 'bold 11px sans-serif';
-          ctx.fillText(waveBannerSub, canvas.width / 2, 112);
-          ctx.restore();
         }
 
         if (!isEnded) gameLoopRef.current = requestAnimationFrame(loop);
@@ -1063,8 +1192,14 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
       }
 
       let digDugRound = 1;
-      let roundBannerText = '';
-      let roundBannerUntil = 0;
+      let roundDialogActive = true;
+      let roundDialogStartTime = 0;
+      const ROUND_DIALOG_DURATION = 3200;
+      let roundDialogTitle = '🥕 ROUND 1: INSIGHT EXCAVATION';
+      let roundDialogSub = 'Gather all root vegetables • Beware of 1 Chaser (Red) + 1 Wanderer (Purple)!';
+      let roundDialogTip = 'Dig with Arrow Keys • Pump monsters with SPACE • Press SPACE to start!';
+      let pausedDurationTotal = 0;
+      let roundPauseStart = 0;
 
       // Round 1 begins with:
       // - 1 Chaser monster (chases player directly at 65% speed)
@@ -1110,8 +1245,8 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
       const loop = (time: number) => {
         if (!gameStartTime) gameStartTime = time;
-        const elapsed = time - gameStartTime;
-        const remainingSeconds = Math.max(0, Math.ceil((TOTAL_DURATION_MS - elapsed) / 1000));
+        const activePlayTime = time - gameStartTime - pausedDurationTotal;
+        const remainingSeconds = Math.max(0, Math.ceil((TOTAL_DURATION_MS - activePlayTime) / 1000));
         setDigDugTimeLeft(remainingSeconds);
 
         // 2-Minute Timer check: Game over when 2 minutes expire
@@ -1129,6 +1264,142 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         ctx.fillRect(0, 0, canvas.width, 48);
         ctx.fillStyle = '#16a34a';
         ctx.fillRect(0, 44, canvas.width, 6);
+
+        // ========================================================
+        // ROUND DIALOG SCREEN: PAUSES DIG DUG IN THE BACKGROUND
+        // Game & timer freeze until dialog is dismissed by player!
+        // ========================================================
+        if (roundDialogActive) {
+          if (roundDialogStartTime === 0) {
+            roundDialogStartTime = time;
+            roundPauseStart = time;
+          }
+
+          const elapsedDialog = time - roundDialogStartTime;
+          const timeLeftSec = Math.max(0, Math.ceil((ROUND_DIALOG_DURATION - elapsedDialog) / 1000));
+          const progressFraction = Math.min(1, elapsedDialog / ROUND_DIALOG_DURATION);
+
+          const userDismissed =
+            canvasDismissTriggered ||
+            keysPressed.current[' '] ||
+            keysPressed.current['Enter'] ||
+            keysPressed.current['TouchAction'];
+
+          if (userDismissed || elapsedDialog >= ROUND_DIALOG_DURATION) {
+            roundDialogActive = false;
+            canvasDismissTriggered = false;
+            if (keysPressed.current[' ']) keysPressed.current[' '] = false;
+            if (keysPressed.current['TouchAction']) keysPressed.current['TouchAction'] = false;
+            handleSound('star');
+
+            // Add the time spent paused so the 2-minute timer is frozen
+            pausedDurationTotal += (time - roundPauseStart);
+
+            // Stun enemies briefly on unpause so they don't instantly bite
+            enemies.forEach(e => {
+              e.stunnedUntil = Math.max(e.stunnedUntil, time + 600);
+            });
+          } else {
+            // Draw tunnels around miner
+            ctx.fillStyle = '#1c1917';
+            ctx.beginPath();
+            ctx.arc(minerX, minerY, 24, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw root vegetables in starting positions
+            veggies.forEach(v => {
+              if (!v.gathered) {
+                if (v.type === 'carrot') {
+                  ctx.fillStyle = '#16a34a';
+                  ctx.fillRect(v.x - 4, v.y - 14, 8, 5);
+                  ctx.fillStyle = '#ea580c';
+                  ctx.beginPath();
+                  ctx.moveTo(v.x - 7, v.y - 9); ctx.lineTo(v.x + 7, v.y - 9); ctx.lineTo(v.x, v.y + 11);
+                  ctx.closePath();
+                  ctx.fill();
+                } else if (v.type === 'potato') {
+                  ctx.fillStyle = '#b45309';
+                  ctx.beginPath();
+                  ctx.ellipse(v.x, v.y, 11, 8, 0.2, 0, Math.PI * 2);
+                  ctx.fill();
+                } else {
+                  ctx.fillStyle = '#16a34a';
+                  ctx.fillRect(v.x - 2, v.y - 13, 4, 5);
+                  ctx.fillStyle = '#a21caf';
+                  ctx.beginPath();
+                  ctx.arc(v.x, v.y, 9, 0, Math.PI * 2);
+                  ctx.fill();
+                }
+              }
+            });
+
+            // Draw enemies in initial cavern pockets
+            enemies.forEach(en => {
+              if (en.alive) {
+                ctx.fillStyle = '#292524';
+                ctx.beginPath();
+                ctx.arc(en.x, en.y, en.radius + 6, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = en.color;
+                ctx.beginPath();
+                ctx.arc(en.x, en.y, en.radius, 0, Math.PI * 2);
+                ctx.fill();
+              }
+            });
+
+            // Draw miner
+            ctx.fillStyle = '#3b82f6';
+            ctx.beginPath();
+            ctx.arc(minerX, minerY, 14, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#fbbf24';
+            ctx.fillRect(minerX - 10, minerY - 18, 20, 8);
+
+            // Draw Dialog Card Screen
+            ctx.save();
+            ctx.fillStyle = 'rgba(6, 10, 20, 0.72)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            const cardW = 470;
+            const cardH = 148;
+            const cardX = (canvas.width - cardW) / 2;
+            const cardY = (canvas.height - cardH) / 2 - 10;
+
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.96)';
+            ctx.fillRect(cardX, cardY, cardW, cardH);
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 2.5;
+            ctx.strokeRect(cardX, cardY, cardW, cardH);
+
+            ctx.fillStyle = '#fde047';
+            ctx.font = 'black 17px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(roundDialogTitle, canvas.width / 2, cardY + 34);
+
+            ctx.fillStyle = '#f8fafc';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(roundDialogSub, canvas.width / 2, cardY + 62);
+
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '11px sans-serif';
+            ctx.fillText(roundDialogTip, canvas.width / 2, cardY + 84);
+
+            const pulse = Math.sin(time * 0.008) * 0.5 + 0.5;
+            ctx.fillStyle = pulse > 0.4 ? '#fde047' : '#fef08a';
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(`▶ PRESS [SPACE] OR CLICK SCREEN TO START (${timeLeftSec}s)`, canvas.width / 2, cardY + 114);
+
+            ctx.fillStyle = 'rgba(51, 65, 85, 0.6)';
+            ctx.fillRect(cardX + 24, cardY + cardH - 12, cardW - 48, 5);
+            ctx.fillStyle = '#eab308';
+            ctx.fillRect(cardX + 24, cardY + cardH - 12, (cardW - 48) * (1 - progressFraction), 5);
+
+            ctx.restore();
+
+            if (!isEnded) gameLoopRef.current = requestAnimationFrame(loop);
+            return;
+          }
+        }
 
         // Miner Controls
         if (keysPressed.current['ArrowLeft'] || keysPressed.current['a'] || keysPressed.current['TouchLeft']) {
@@ -1279,8 +1550,6 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           localScore += 500;
           setCurrentScore(localScore);
           handleSound('star');
-          roundBannerText = `🎉 ROUND ${digDugRound} COMPLETED! +1 RANDOM MONSTER ADDED!`;
-          roundBannerUntil = time + 2500;
 
           // Respawn root vegetables at fresh subterranean positions
           veggies.forEach(v => {
@@ -1307,6 +1576,15 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
             wanderTimer: time + 1800,
             wanderSpeed: speed * 0.70
           });
+
+          // Trigger Round Dialog Pause for the new round
+          const wanderingCount = enemies.filter(e => e.behavior === 'wanderer').length;
+          roundDialogActive = true;
+          roundDialogStartTime = 0;
+          canvasDismissTriggered = false;
+          roundDialogTitle = `🎉 ROUND ${digDugRound}: +1 ROAMING MONSTER ADDED!`;
+          roundDialogSub = `Now facing 1 Chaser + ${wanderingCount} Roaming Monsters underground!`;
+          roundDialogTip = 'Dig new escape tunnels & pump monsters with SPACE before they bite!';
         }
 
         // UPDATE & DRAW SUBTERRANEAN MONSTERS (1 Chaser + Random Roaming Monsters)
@@ -1316,7 +1594,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           if (!en.alive) return;
           const isStunned = time < en.stunnedUntil;
 
-          if (!isStunned && elapsed > 1500) {
+          if (!isStunned && activePlayTime > 1500) {
             if (en.behavior === 'chaser') {
               // Homing pursuit towards miner at 75% player speed
               const dx = minerX - en.x;
@@ -1421,18 +1699,6 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           ctx.fillRect(minerX - 10, minerY - 18, 20, 8); // hard hat
         }
 
-        // Draw Round Banner announcement
-        if (time < roundBannerUntil && roundBannerText) {
-          ctx.fillStyle = 'rgba(15, 23, 42, 0.88)';
-          ctx.fillRect(35, 75, canvas.width - 70, 36);
-          ctx.strokeStyle = '#facc15';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(35, 75, canvas.width - 70, 36);
-          ctx.fillStyle = '#fde047';
-          ctx.font = 'bold 12px sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(roundBannerText, canvas.width / 2, 97);
-        }
 
         // Surface HUD: Round & Monster Counts + 2-Minute Timer
         const wanderingCount = enemies.filter(e => e.behavior === 'wanderer').length;
@@ -1705,6 +1971,12 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
       let itemsCollected = 0;
       let speed = baseSpeed * (1 + itemsCollected * 0.01);
 
+      // 3-Fuel Nitro Booster Mechanics
+      let fuelsTowardBoost = 0;
+      let boostCharges = 0;
+      let boostActiveUntil = 0;
+      let outrunFloatTexts: { text: string; x: number; y: number; color: string; life: number; vy: number }[] = [];
+
       // Obstacles: Rival Cars, Boulders/Rocks, Construction Barricades
       interface Obstacle {
         x: number;
@@ -1718,19 +1990,35 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         { x: 280, y: -480, type: 'barricade' }
       ];
 
-      // Collectibles: Fuel Jerry Cans & Spinning Gold Rings
+      // Collectibles: Fuel Jerry Cans & Stacks of Money
       interface Collectible {
         x: number;
         y: number;
-        type: 'fuel' | 'gold_ring';
+        type: 'fuel' | 'money_stack';
       }
 
       let collectibles: Collectible[] = [
         { x: 250, y: -140, type: 'fuel' },
-        { x: 410, y: -360, type: 'gold_ring' }
+        { x: 410, y: -360, type: 'money_stack' }
       ];
 
       const loop = (time: number) => {
+        // Spacebar or TouchAction to trigger Nitro Boost
+        if ((keysPressed.current[' '] || keysPressed.current['TouchAction']) && boostCharges > 0 && time >= boostActiveUntil) {
+          boostCharges--;
+          setOutrunBoostCharges(boostCharges);
+          boostActiveUntil = time + 3000;
+          keysPressed.current[' '] = false;
+          keysPressed.current['TouchAction'] = false;
+          handleSound('victory');
+          outrunFloatTexts.push({ text: '🚀 NITRO BOOST! +20% SPEED!', x: carX, y: carY - 40, color: '#38bdf8', life: 1.8, vy: -1.0 });
+        }
+
+        const isBoosting = time < boostActiveUntil;
+        setOutrunIsBoosting(isBoosting);
+        const currentBaseSpeed = baseSpeed * (1 + itemsCollected * 0.01);
+        speed = isBoosting ? currentBaseSpeed * 1.20 : currentBaseSpeed;
+
         // Track Grass Background
         ctx.fillStyle = '#064e3b';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1742,11 +2030,11 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         ctx.fillRect(roadL, 0, roadW, canvas.height);
 
         // Solid Yellow Road Boundaries (Non-flashing)
-        ctx.fillStyle = '#facc15'; // Solid safety yellow edge
+        ctx.fillStyle = isBoosting ? '#38bdf8' : '#facc15'; // Glowing blue edges when boosting!
         ctx.fillRect(roadL - 8, 0, 8, canvas.height);
         ctx.fillRect(roadL + roadW, 0, 8, canvas.height);
-        // Inner crisp amber border for road definition
-        ctx.fillStyle = '#ca8a04';
+        // Inner crisp amber/cyan border for road definition
+        ctx.fillStyle = isBoosting ? '#0284c7' : '#ca8a04';
         ctx.fillRect(roadL - 1, 0, 1, canvas.height);
         ctx.fillRect(roadL + roadW, 0, 1, canvas.height);
 
@@ -1763,6 +2051,23 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         ctx.stroke();
         ctx.setLineDash([]);
 
+        // Warp speed streak lines along road when boosting
+        if (isBoosting) {
+          ctx.strokeStyle = 'rgba(56, 189, 248, 0.45)';
+          ctx.lineWidth = 2;
+          for (let s = 0; s < 6; s++) {
+            const streakY = ((time * 0.8 + s * 70) % canvas.height);
+            const sideLeft = roadL + 12 + (s % 2) * 20;
+            const sideRight = roadL + roadW - 12 - (s % 2) * 20;
+            ctx.beginPath();
+            ctx.moveTo(sideLeft, streakY);
+            ctx.lineTo(sideLeft, streakY + 28);
+            ctx.moveTo(sideRight, streakY);
+            ctx.lineTo(sideRight, streakY + 28);
+            ctx.stroke();
+          }
+        }
+
         // Controls
         if (keysPressed.current['ArrowLeft'] || keysPressed.current['a'] || keysPressed.current['TouchLeft']) {
           carX = Math.max(roadL + 22, carX - 6.5);
@@ -1771,8 +2076,8 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           carX = Math.min(roadL + roadW - 22, carX + 6.5);
         }
 
-        // Distance points
-        localScore += 2;
+        // Distance points (higher while boosting)
+        localScore += isBoosting ? 3 : 2;
         setCurrentScore(localScore);
 
         // MOVE & RENDER OBSTACLES (Rival cars, boulders, barricades)
@@ -1836,7 +2141,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
           }
         });
 
-        // MOVE & RENDER COLLECTIBLES (Fuel Jerry Cans & Spinning Gold Rings)
+        // MOVE & RENDER COLLECTIBLES (Fuel Jerry Cans & Money Stacks)
         collectibles.forEach(col => {
           col.y += speed;
 
@@ -1849,19 +2154,48 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
             ctx.fillStyle = '#facc15';
             ctx.fillRect(col.x + 4, col.y - 18, 4, 6);
             ctx.fillStyle = '#ffffff';
-            ctx.font = 'black 8px sans-serif';
+            ctx.font = 'bold 8px sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('FUEL', col.x, col.y + 4);
           } else {
-            // Spinning 3D Golden Ring
-            const ringWidth = Math.abs(Math.sin(time * 0.005)) * 14 + 4;
-            ctx.strokeStyle = '#facc15';
-            ctx.lineWidth = 4;
+            // 3D Layered Stack of Money with Gold Currency Band
+            const billW = 30;
+            const billH = 17;
+            // Base shadow/depth layers
+            ctx.fillStyle = '#064e3b';
             ctx.beginPath();
-            ctx.ellipse(col.x, col.y, ringWidth, 14, 0, 0, Math.PI * 2);
+            ctx.roundRect(col.x - billW / 2 + 2, col.y - billH / 2 + 3, billW, billH, 3);
+            ctx.fill();
+            ctx.fillStyle = '#047857';
+            ctx.beginPath();
+            ctx.roundRect(col.x - billW / 2 + 1, col.y - billH / 2 + 1.5, billW, billH, 3);
+            ctx.fill();
+            // Top banknote
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.roundRect(col.x - billW / 2, col.y - billH / 2, billW, billH, 3);
+            ctx.fill();
+            ctx.strokeStyle = '#065f46';
+            ctx.lineWidth = 1;
             ctx.stroke();
-            ctx.fillStyle = '#ffffff';
-            ctx.fillRect(col.x - 1, col.y - 1, 3, 3);
+            // Inner mint border
+            ctx.strokeStyle = '#6ee7b7';
+            ctx.strokeRect(col.x - billW / 2 + 2, col.y - billH / 2 + 2, billW - 4, billH - 4);
+            // Gold currency strap
+            ctx.fillStyle = '#facc15';
+            ctx.fillRect(col.x - 3, col.y - billH / 2, 6, billH);
+            ctx.strokeStyle = '#ca8a04';
+            ctx.strokeRect(col.x - 3, col.y - billH / 2, 6, billH);
+            // $ Sign
+            ctx.fillStyle = '#064e3b';
+            ctx.font = 'bold 9px sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('$', col.x, col.y + 3);
+            // Sparkle
+            if (Math.sin(time * 0.007) > 0.4) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(col.x + 9, col.y - 6, 2, 2);
+            }
           }
 
           // Pickup check: award points, increment items, ramp speed up 1%
@@ -1869,10 +2203,29 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
             col.y = -100;
             col.x = roadL + Math.random() * (roadW - 50) + 25;
             itemsCollected++;
-            speed = baseSpeed * (1 + itemsCollected * 0.01);
-            localScore += col.type === 'fuel' ? 250 : 350;
+
+            if (col.type === 'fuel') {
+              localScore += 250;
+              fuelsTowardBoost++;
+              setOutrunFuelsCount(fuelsTowardBoost);
+              if (fuelsTowardBoost >= 3) {
+                fuelsTowardBoost = 0;
+                setOutrunFuelsCount(0);
+                boostCharges++;
+                setOutrunBoostCharges(boostCharges);
+                handleSound('star');
+                outrunFloatTexts.push({ text: '🚀 NITRO BOOST READY! [SPACE]', x: carX, y: carY - 40, color: '#facc15', life: 1.8, vy: -1.0 });
+              } else {
+                handleSound('correct');
+                outrunFloatTexts.push({ text: `+250★ FUEL (${fuelsTowardBoost}/3)`, x: carX, y: carY - 30, color: '#4ade80', life: 1.2, vy: -0.8 });
+              }
+            } else {
+              localScore += 350;
+              handleSound('correct');
+              outrunFloatTexts.push({ text: '💵 +350★ CASH STACK!', x: carX, y: carY - 30, color: '#10b981', life: 1.2, vy: -0.8 });
+            }
+
             setCurrentScore(localScore);
-            handleSound('correct');
           }
 
           if (col.y > canvas.height + 40) {
@@ -1905,10 +2258,39 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         ctx.fillRect(carX - 22, carY + 8, 5, 12);
         ctx.fillRect(carX + 17, carY + 8, 5, 12);
 
-        const flameLength = Math.random() * 8 + 4;
-        ctx.fillStyle = '#38bdf8';
-        ctx.fillRect(carX - 10, carY + 28, 3, flameLength);
-        ctx.fillRect(carX + 7, carY + 28, 3, flameLength);
+        // Exhaust flames: Regular or Nitro Boost
+        if (isBoosting) {
+          const turboFlameLen = Math.random() * 20 + 20;
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(carX - 12, carY + 28, 5, turboFlameLen);
+          ctx.fillRect(carX + 7, carY + 28, 5, turboFlameLen);
+          ctx.fillStyle = '#facc15';
+          ctx.fillRect(carX - 10, carY + 28, 2, turboFlameLen * 0.7);
+          ctx.fillRect(carX + 8, carY + 28, 2, turboFlameLen * 0.7);
+        } else {
+          const flameLength = Math.random() * 8 + 4;
+          ctx.fillStyle = '#38bdf8';
+          ctx.fillRect(carX - 10, carY + 28, 3, flameLength);
+          ctx.fillRect(carX + 7, carY + 28, 3, flameLength);
+        }
+
+        // Render Floating Text Notifications
+        for (let i = outrunFloatTexts.length - 1; i >= 0; i--) {
+          const ft = outrunFloatTexts[i];
+          ft.y += ft.vy;
+          ft.life -= 0.02;
+          if (ft.life <= 0) {
+            outrunFloatTexts.splice(i, 1);
+            continue;
+          }
+          ctx.save();
+          ctx.globalAlpha = Math.max(0, Math.min(1, ft.life));
+          ctx.fillStyle = ft.color;
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(ft.text, ft.x, ft.y);
+          ctx.restore();
+        }
 
         // ---------------------------------------------------------
         // ON-SCREEN DRIVER GUIDE (Left Side: What to Get & Avoid)
@@ -1943,109 +2325,181 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         ctx.textAlign = 'left';
         ctx.fillText('FUEL CAN', 34, 82);
         ctx.fillStyle = '#4ade80';
-        ctx.fillText('+250★ (+1% Spd)', 34, 92);
+        ctx.fillText('+250★ (3 = Boost)', 34, 92);
 
-        // Gold Ring Icon
-        const guideRingW = Math.abs(Math.sin(time * 0.005)) * 7 + 3;
-        ctx.strokeStyle = '#facc15';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.ellipse(22, 114, guideRingW, 8, 0, 0, Math.PI * 2);
-        ctx.stroke();
+        // Cash Stack Icon
+        ctx.fillStyle = '#047857';
+        ctx.fillRect(15, 108, 16, 9);
+        ctx.fillStyle = '#10b981';
+        ctx.fillRect(14, 106, 16, 9);
+        ctx.strokeStyle = '#6ee7b7';
+        ctx.strokeRect(15, 107, 14, 7);
+        ctx.fillStyle = '#facc15';
+        ctx.fillRect(20, 105, 4, 11);
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 8px sans-serif';
-        ctx.fillText('GOLD RING', 34, 111);
-        ctx.fillStyle = '#facc15';
+        ctx.fillText('CASH STACK', 34, 111);
+        ctx.fillStyle = '#10b981';
         ctx.fillText('+350★ (+1% Spd)', 34, 121);
 
+        // NITRO BOOSTER GUIDE
         ctx.strokeStyle = '#334155';
-        ctx.beginPath(); ctx.moveTo(12, 134); ctx.lineTo(116, 134); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(12, 133); ctx.lineTo(116, 133); ctx.stroke();
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('NITRO BOOST:', 64, 146);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '8px sans-serif';
+        ctx.fillText('Collect 3 Fuel Cans', 64, 158);
+        ctx.fillStyle = '#facc15';
+        ctx.font = 'bold 8px sans-serif';
+        ctx.fillText('Press [SPACE] for', 64, 170);
+        ctx.fillStyle = '#38bdf8';
+        ctx.fillText('+20% SPD (3 SEC)', 64, 182);
+
+        ctx.strokeStyle = '#334155';
+        ctx.beginPath(); ctx.moveTo(12, 192); ctx.lineTo(116, 192); ctx.stroke();
 
         // AVOID SECTION
         ctx.fillStyle = '#f87171';
         ctx.font = 'bold 9px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('AVOID (-1 LIFE):', 64, 148);
+        ctx.fillText('AVOID (-1 LIFE):', 64, 206);
 
         // Rival Car Icon
         ctx.fillStyle = '#2563eb';
-        ctx.fillRect(15, 158, 14, 20);
+        ctx.fillRect(15, 215, 14, 18);
         ctx.fillStyle = '#0f172a';
-        ctx.fillRect(17, 163, 10, 8);
+        ctx.fillRect(17, 220, 10, 7);
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 8px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText('RIVAL CAR', 34, 166);
-        ctx.fillStyle = '#f87171';
-        ctx.fillText('Lose 1 Life', 34, 176);
-
-        // Boulder Icon
-        ctx.fillStyle = '#64748b';
-        ctx.beginPath(); ctx.arc(22, 196, 7, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText('BOULDER', 34, 194);
-        ctx.fillStyle = '#f87171';
-        ctx.fillText('Lose 1 Life', 34, 204);
-
-        // Barricade Icon
-        ctx.fillStyle = '#f97316';
-        ctx.fillRect(14, 216, 16, 10);
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(18, 216, 4, 10);
-        ctx.fillText('BARRIER', 34, 222);
+        ctx.fillText('RIVAL CAR', 34, 222);
         ctx.fillStyle = '#f87171';
         ctx.fillText('Lose 1 Life', 34, 232);
 
+        // Boulder Icon
+        ctx.fillStyle = '#64748b';
+        ctx.beginPath(); ctx.arc(22, 250, 7, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText('BOULDER', 34, 248);
+        ctx.fillStyle = '#f87171';
+        ctx.fillText('Lose 1 Life', 34, 258);
+
+        // Barricade Icon
+        ctx.fillStyle = '#f97316';
+        ctx.fillRect(14, 269, 16, 10);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(18, 269, 4, 10);
+        ctx.fillText('BARRIER', 34, 275);
+        ctx.fillStyle = '#f87171';
+        ctx.fillText('Lose 1 Life', 34, 285);
+
         ctx.strokeStyle = '#334155';
-        ctx.beginPath(); ctx.moveTo(12, 245); ctx.lineTo(116, 245); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(12, 298); ctx.lineTo(116, 298); ctx.stroke();
 
         // Speed ramp description
         ctx.fillStyle = '#facc15';
         ctx.font = 'bold 9px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('SPEED RAMP:', 64, 260);
+        ctx.fillText('SPEED RAMP:', 64, 313);
         ctx.fillStyle = '#94a3b8';
         ctx.font = '8px sans-serif';
-        ctx.fillText('Starts at 50% Speed', 64, 274);
+        ctx.fillText('Starts at 50% Speed', 64, 327);
         ctx.fillStyle = '#38bdf8';
         ctx.font = 'bold 8px sans-serif';
-        ctx.fillText('+1% per Item Picked', 64, 288);
+        ctx.fillText('+1% per Item Picked', 64, 341);
 
         // ---------------------------------------------------------
-        // ON-SCREEN SPEEDOMETER & ITEMS HUD (Right Side)
+        // ON-SCREEN SPEEDOMETER & BOOSTER HUD (Right Side)
         // ---------------------------------------------------------
         ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
-        ctx.fillRect(478, 30, 116, 140);
-        ctx.strokeStyle = '#38bdf8';
-        ctx.lineWidth = 1.5;
-        ctx.strokeRect(478, 30, 116, 140);
+        ctx.fillRect(478, 30, 116, 212);
+        ctx.strokeStyle = isBoosting ? '#facc15' : '#38bdf8';
+        ctx.lineWidth = isBoosting ? 2.5 : 1.5;
+        ctx.strokeRect(478, 30, 116, 212);
 
-        ctx.fillStyle = '#facc15';
+        ctx.fillStyle = isBoosting ? '#facc15' : '#38bdf8';
         ctx.font = 'bold 10px sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('SPEEDOMETER', 536, 46);
+        ctx.fillText(isBoosting ? '🔥 NITRO SURGE!' : 'SPEEDOMETER', 536, 46);
 
-        const currentSpeedPct = Math.round(50 + itemsCollected);
-        ctx.fillStyle = currentSpeedPct > 80 ? '#f87171' : currentSpeedPct > 65 ? '#facc15' : '#38bdf8';
+        const currentSpeedPct = Math.round((50 + itemsCollected) * (isBoosting ? 1.20 : 1.0));
+        ctx.fillStyle = isBoosting ? '#facc15' : currentSpeedPct > 80 ? '#f87171' : '#38bdf8';
         ctx.font = 'bold 20px sans-serif';
-        ctx.fillText(`${currentSpeedPct}%`, 536, 74);
+        ctx.fillText(`${currentSpeedPct}%`, 536, 72);
 
-        ctx.fillStyle = '#94a3b8';
+        ctx.fillStyle = isBoosting ? '#38bdf8' : '#94a3b8';
         ctx.font = 'bold 8px sans-serif';
-        ctx.fillText(`+${itemsCollected}% from items`, 536, 88);
+        ctx.fillText(isBoosting ? '+20% NITRO BOOST!' : `+${itemsCollected}% from items`, 536, 85);
 
         // Speed meter bar
         ctx.fillStyle = '#1e293b';
-        ctx.fillRect(486, 96, 100, 10);
-        const gaugeFill = Math.min(100, (currentSpeedPct / 120) * 100);
-        ctx.fillStyle = currentSpeedPct > 80 ? '#f87171' : currentSpeedPct > 65 ? '#facc15' : '#4ade80';
-        ctx.fillRect(486, 96, gaugeFill, 10);
+        ctx.fillRect(486, 92, 100, 8);
+        const gaugeFill = Math.min(100, (currentSpeedPct / 140) * 100);
+        ctx.fillStyle = isBoosting ? '#facc15' : currentSpeedPct > 80 ? '#f87171' : '#4ade80';
+        ctx.fillRect(486, 92, gaugeFill, 8);
 
         ctx.fillStyle = '#ffffff';
         ctx.font = 'bold 8px sans-serif';
-        ctx.fillText(`ITEMS COLLECTED: ${itemsCollected}`, 536, 124);
+        ctx.fillText(`ITEMS PICKED: ${itemsCollected}`, 536, 114);
         ctx.fillStyle = '#38bdf8';
-        ctx.fillText(`VELOCITY: ${(speed * 10).toFixed(1)} MPH`, 536, 136);
+        ctx.fillText(`VELOCITY: ${(speed * 10).toFixed(1)} MPH`, 536, 126);
+
+        // Divider
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(484, 134); ctx.lineTo(588, 134); ctx.stroke();
+
+        // NITRO BOOSTER HUD
+        ctx.fillStyle = '#facc15';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.fillText('NITRO BOOSTER', 536, 148);
+
+        // 3 Fuel Gauge Pips
+        for (let p = 0; p < 3; p++) {
+          const pipX = 496 + p * 28;
+          const pipFilled = p < fuelsTowardBoost;
+          ctx.fillStyle = pipFilled ? '#dc2626' : '#1e293b';
+          ctx.fillRect(pipX, 156, 20, 12);
+          ctx.strokeStyle = pipFilled ? '#f87171' : '#475569';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(pipX, 156, 20, 12);
+          if (pipFilled) {
+            ctx.fillStyle = '#ffffff';
+            ctx.font = 'bold 7px sans-serif';
+            ctx.fillText('⛽', pipX + 10, 165);
+          }
+        }
+
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '8px sans-serif';
+        ctx.fillText(`Fuel: ${fuelsTowardBoost}/3`, 536, 180);
+
+        // Booster Status Label
+        if (isBoosting) {
+          const timeLeftSec = ((boostActiveUntil - time) / 1000).toFixed(1);
+          ctx.fillStyle = '#facc15';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillText(`🔥 SURGE: ${timeLeftSec}s`, 536, 196);
+          ctx.fillStyle = '#38bdf8';
+          ctx.font = '7px sans-serif';
+          ctx.fillText('+20% Top Speed!', 536, 206);
+        } else if (boostCharges > 0) {
+          ctx.fillStyle = '#4ade80';
+          ctx.font = 'bold 9px sans-serif';
+          ctx.fillText(`🚀 READY (${boostCharges})`, 536, 196);
+          ctx.fillStyle = '#facc15';
+          ctx.font = 'bold 8px sans-serif';
+          ctx.fillText('PRESS [SPACE]', 536, 206);
+        } else {
+          ctx.fillStyle = '#64748b';
+          ctx.font = '8px sans-serif';
+          ctx.fillText('Collect 3 Fuels', 536, 196);
+          ctx.fillText('to charge boost', 536, 206);
+        }
 
         if (!isEnded) gameLoopRef.current = requestAnimationFrame(loop);
       };
@@ -2075,7 +2529,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
       let angleDeg = archeryAngle; // 15° to 75°
       let strength = 60;
-      let strengthDir = 1.8;
+      let strengthDir = 0.8; // Tuned for comfortable, relaxed timing
       let inFlight = false;
 
       let arrowX = archerX;
@@ -2136,13 +2590,13 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
         if (keysPressed.current['2']) { currentDistKey = 'mid'; setArcheryDistance('mid'); targetTargetX = targetPositions['mid'].x; }
         if (keysPressed.current['3']) { currentDistKey = 'far'; setArcheryDistance('far'); targetTargetX = targetPositions['far'].x; }
 
-        // Angle controls with Up/Down or W/S
-        if (keysPressed.current['ArrowUp'] || keysPressed.current['w']) {
-          angleDeg = Math.min(75, angleDeg + 0.6);
+        // Precision angle controls with Up/Down or W/S or touch buttons (smooth 0.22 deg/frame)
+        if (keysPressed.current['ArrowUp'] || keysPressed.current['w'] || keysPressed.current['TouchUp']) {
+          angleDeg = Math.min(75, angleDeg + 0.22);
           setArcheryAngle(Math.round(angleDeg));
         }
-        if (keysPressed.current['ArrowDown'] || keysPressed.current['s']) {
-          angleDeg = Math.max(15, angleDeg - 0.6);
+        if (keysPressed.current['ArrowDown'] || keysPressed.current['s'] || keysPressed.current['TouchDown']) {
+          angleDeg = Math.max(15, angleDeg - 0.22);
           setArcheryAngle(Math.round(angleDeg));
         }
 
@@ -2463,6 +2917,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
     }
 
     return () => {
+      canvas.removeEventListener('pointerdown', handleCanvasPointer);
       if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
     };
   }, [isPlaying, activeGameId, archeryDistance, archeryAngle]);
@@ -2782,11 +3237,11 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
             <div className="w-full max-w-xl flex items-center justify-between gap-1.5 px-3 py-1 bg-slate-950/90 border border-slate-800 rounded-xl text-xs shrink-0 mt-1">
               <div className="flex items-center gap-1.5 text-[11px]">
                 <span className="text-emerald-400 font-bold">Collect:</span>
-                <span className="text-slate-300">⛽ Fuel (+250★) & 🟡 Rings (+350★) • +1% Speed</span>
+                <span className="text-slate-300">⛽ Fuel (+250★) & 💵 Cash Stacks (+350★)</span>
               </div>
               <div className="flex items-center gap-1.5 text-[11px]">
-                <span className="text-rose-400 font-bold">Avoid:</span>
-                <span className="text-slate-300">🚙 Cars, 🪨 Rocks, 🚧 Barriers (-1 ❤️)</span>
+                <span className="text-amber-400 font-bold">🚀 3 Fuels = Nitro:</span>
+                <span className="text-slate-300">Press [Space] for +20% Speed (3s)</span>
               </div>
             </div>
           )}
@@ -2867,7 +3322,11 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
               onMouseUp={() => { keysPressed.current['TouchAction'] = false; }}
               onTouchStart={() => { keysPressed.current['TouchAction'] = true; }}
               onTouchEnd={() => { keysPressed.current['TouchAction'] = false; }}
-              className="px-4 sm:px-6 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-amber-500 text-white font-display font-extrabold text-xs sm:text-sm active:scale-95 shadow-md flex items-center gap-1.5"
+              className={`px-4 sm:px-6 py-2 rounded-xl text-white font-display font-extrabold text-xs sm:text-sm active:scale-95 shadow-md flex items-center gap-1.5 transition-all ${
+                activeGameId === 'outrun' && outrunBoostCharges > 0
+                  ? 'bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 animate-pulse ring-2 ring-amber-400'
+                  : 'bg-gradient-to-r from-rose-500 to-amber-500'
+              }`}
             >
               {activeGameId === 'archery'
                 ? '🎯 Release Arrow'
@@ -2876,7 +3335,11 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
                 : activeGameId === 'dig_dug'
                 ? '💨 Air Pump'
                 : activeGameId === 'outrun'
-                ? '⚡ Steer'
+                ? outrunIsBoosting
+                  ? '🔥 BOOST ACTIVE!'
+                  : outrunBoostCharges > 0
+                  ? `🚀 NITRO BOOST [SPACE] (${outrunBoostCharges})`
+                  : `⚡ Boost (${outrunFuelsCount}/3 Fuels)`
                 : 'Action'}
             </button>
           </div>
@@ -2884,7 +3347,7 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
 
         {/* Slim Footer */}
         <div className="px-3 py-1.5 bg-slate-950 border-t border-slate-800 flex items-center justify-between text-[11px] text-slate-400 shrink-0">
-          <span className="truncate">Keyboard: [Arrow Keys / W-S] + [Space] to Action • [1-3] Target Distance</span>
+          <span className="truncate">Keyboard: [Arrow Keys / A-D / W-S] • [Space] to Action / Boost • [1-3] Target Distance</span>
           <button
             onClick={onClose}
             className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs shrink-0 ml-2"

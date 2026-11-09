@@ -140,10 +140,10 @@ export const ARCADE_GAMES: Record<ArcadeGameId, ArcadeGameInfo> = {
     stageNumber: 4,
     title: 'Rapid Outrun: Maker Raceway',
     arcadeClassic: 'OutRun',
-    tagline: 'Steer your sports car through highway traffic! Dodge rival cars & boulders, grab fuel & gold rings.',
+    tagline: 'Steer through highway traffic! Dodge obstacles, collect fuel & stacks of money. Collect 3 fuels for a 20% nitro speed boost!',
     themeColor: '#10b981',
     accentBg: 'from-emerald-600 to-teal-800',
-    instructions: 'Use [Left] / [Right] to steer your sports car. Dodge rival cars and rocks. Grab fuel cans and gold rings for turbo bonuses! 3 Lives.'
+    instructions: 'Steer with [Left] / [Right]. Dodge rival cars & boulders. Collect fuel cans and stacks of money! Grab 3 fuels to charge your booster, then press [SPACE] for a 3-second 20% speed surge. 3 Lives.'
   },
   archery: {
     id: 'archery',
@@ -151,10 +151,10 @@ export const ARCADE_GAMES: Record<ArcadeGameId, ArcadeGameInfo> = {
     stageNumber: 5,
     title: 'Precision Archer: Bullseye Pitch',
     arcadeClassic: 'Archery Bullseye',
-    tagline: 'Tune launch angle and draw strength to sink arrows into the bullseye at variable distances!',
+    tagline: 'Tune your aiming angle and power meter to sink arrows into the bullseye at variable distances!',
     themeColor: '#f43f5e',
     accentBg: 'from-rose-600 to-red-800',
-    instructions: 'Set bow angle and strength, move the target closer or farther away, and release [Shoot Arrow] to hit the center yellow bullseye! 3 Lives / Misses.'
+    instructions: 'Use [Up] / [Down] or [W] / [S] for smooth, precision angle aiming. Time your draw strength and press [SPACE] to release. Hit the bullseye! 3 Lives / Misses.'
   }
 };
 
