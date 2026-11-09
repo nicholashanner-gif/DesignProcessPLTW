@@ -97,7 +97,11 @@ test('isGoalReached verifies certificate eligibility threshold of 38 stars', () 
     highProgress[lvl.id] = { levelId: lvl.id, completed: true, stars: 3, score: 100, attempts: 1 };
   }
   assert.equal(calculateTotalStars(highProgress), 39);
-  assert.equal(isGoalReached(highProgress, ALL_LEVELS, 38), true);
+  // Level 5-3 completion unlocks certificate even with fewer than 38 stars
+  const questDoneProgress: Record<string, LevelProgress> = {
+    'lvl-5-3': { levelId: 'lvl-5-3', completed: true, stars: 2, score: 75, attempts: 1 }
+  };
+  assert.equal(isGoalReached(questDoneProgress, ALL_LEVELS, 38), true);
 });
 
 test('calculateStageProgress calculates accurate percentages and stats for a stage', () => {
@@ -123,12 +127,21 @@ test('getGoogleClassroomShareUrl constructs valid sharing URL with title and url
     'https://ais-test.app',
     'DQ-NICH-38-7890',
     'Nicholas Hanner',
-    38
+    38,
+    {
+      arcadeScores: { space_invaders: 1400, dig_dug: 1250, tetris: 2800, outrun: 1950, archery: 1200 },
+      stageStars: [9, 9, 8, 8, 4]
+    }
   );
   assert.ok(url.startsWith('https://classroom.google.com/share?'));
   assert.ok(url.includes('url='));
   assert.ok(url.includes('title='));
   assert.ok(url.includes('DQ-NICH-38-7890'));
+  // Verify embedded student verification parameters
+  const decodedUrl = decodeURIComponent(url);
+  assert.ok(decodedUrl.includes('stars=38'));
+  assert.ok(decodedUrl.includes('stages=9_9_8_8_4'));
+  assert.ok(decodedUrl.includes('scores=1400_1250_2800_1950_1200'));
 });
 
 test('getEarnedBadges awards First Flight badge on earning first star', () => {

@@ -559,8 +559,9 @@ export function isGoalReached(
 ): boolean {
   const safeProgress = progress && typeof progress === 'object' ? progress : {};
   const totalStars = calculateTotalStars(safeProgress);
-  // Reached if minimum stars met OR at least 8 levels completed with at least 1 star each in all 5 worlds
+  // Reached if minimum stars met (38★), OR if Level 5-3 is completed, OR at least 1 level completed in all 5 worlds
   if (totalStars >= minStars) return true;
+  if (safeProgress['lvl-5-3']?.completed && (safeProgress['lvl-5-3']?.stars || 0) >= 1) return true;
   
   // Or if completed at least one level in every one of the 5 worlds
   const distinctWorldsCompleted = new Set(
@@ -623,18 +624,50 @@ export function generateCertificateCode(studentName: string, totalStars: number,
 }
 
 /**
+ * Extra metadata to securely encode into Google Classroom share URL
+ */
+export interface CertificateShareData {
+  arcadeScores?: ArcadeScores;
+  stageStars?: number[];
+  dateCompleted?: string;
+}
+
+/**
  * Generates the official Google Classroom share link with query parameters.
+ * Securely encodes verified stars, student name, certificate code, and scores
+ * so the teacher's Google Classroom preview displays the authentic stars without disappearing.
  */
 export function getGoogleClassroomShareUrl(
   appUrl: string,
   certificateCode: string,
   studentName: string,
-  totalStars: number
+  totalStars: number,
+  extraData?: CertificateShareData
 ): string {
+  const cleanAppUrl = (appUrl || '').split('?')[0].replace(/\/$/, '');
   const title = encodeURIComponent(
     `Design Process Certificate: ${studentName || 'Student'} (${totalStars} Stars Earned - Code: ${certificateCode})`
   );
-  const shareTargetUrl = encodeURIComponent(`${appUrl}?cert=${certificateCode}&student=${encodeURIComponent(studentName)}`);
+
+  const queryParts = [
+    `cert=${encodeURIComponent(certificateCode)}`,
+    `student=${encodeURIComponent(studentName || 'Student')}`,
+    `stars=${totalStars}`,
+    `v=1`
+  ];
+
+  if (extraData?.stageStars && extraData.stageStars.length > 0) {
+    queryParts.push(`stages=${extraData.stageStars.join('_')}`);
+  }
+
+  if (extraData?.arcadeScores) {
+    const s = extraData.arcadeScores;
+    queryParts.push(
+      `scores=${s.space_invaders || 0}_${s.dig_dug || 0}_${s.tetris || 0}_${s.outrun || 0}_${s.archery || 0}`
+    );
+  }
+
+  const shareTargetUrl = encodeURIComponent(`${cleanAppUrl}?${queryParts.join('&')}`);
   return `https://classroom.google.com/share?url=${shareTargetUrl}&title=${title}`;
 }
 

@@ -44,6 +44,7 @@ interface ArcadeGamesModalProps {
   certificateUnlocked?: boolean;
   attempts?: Record<ArcadeGameId, number>;
   onRecordAttempt?: (gameId: ArcadeGameId) => void;
+  onOpenCertificate?: () => void;
 }
 
 export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
@@ -54,7 +55,8 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
   soundEnabled,
   certificateUnlocked = false,
   attempts = { space_invaders: 0, dig_dug: 0, tetris: 0, outrun: 0, archery: 0 },
-  onRecordAttempt
+  onRecordAttempt,
+  onOpenCertificate
 }) => {
   const [activeGameId, setActiveGameId] = useState<ArcadeGameId>(initialGameId);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -3177,6 +3179,21 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
                         : `High Score: ${currentHighScore}`}
                     </p>
 
+                    {/* Stage 5 Finale (Archery) or Certificate Unlocked: Dedicated Generate Certificate Button */}
+                    {(activeGameId === 'archery' || certificateUnlocked) && (
+                      <button
+                        onClick={() => {
+                          onClose();
+                          if (onOpenCertificate) onOpenCertificate();
+                        }}
+                        className="game-btn w-full max-w-sm px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 via-amber-400 to-yellow-400 text-slate-950 font-display font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 hover:scale-105 animate-pulse cursor-pointer"
+                      >
+                        <Trophy className="w-4 h-4 text-slate-950" />
+                        <span>🎓 Generate Official Certificate</span>
+                        <ArrowRight className="w-4 h-4 text-slate-950" />
+                      </button>
+                    )}
+
                     {canPlayAgain ? (
                       <div className="flex gap-2.5 pt-1">
                         <button
@@ -3187,10 +3204,15 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
                           <span>{certificateUnlocked ? 'Play Again' : 'Play 1 Additional Time'}</span>
                         </button>
                         <button
-                          onClick={onClose}
+                          onClick={() => {
+                            onClose();
+                            if ((activeGameId === 'archery' || certificateUnlocked) && onOpenCertificate) {
+                              onOpenCertificate();
+                            }
+                          }}
                           className="game-btn px-5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-display font-bold text-xs"
                         >
-                          Continue to Questions
+                          {activeGameId === 'archery' ? 'Finish Quest & View Certificate' : 'Continue to Questions'}
                         </button>
                       </div>
                     ) : (
@@ -3201,14 +3223,21 @@ export const ArcadeGamesModal: React.FC<ArcadeGamesModalProps> = ({
                             <span>Stage Plays Completed (2/2)</span>
                           </div>
                           <p className="text-[11px] text-slate-300">
-                            You've used your 1 additional play for this stage! Return to the questions to earn stars. Unlock your Certificate at 38★ to replay anytime!
+                            {activeGameId === 'archery'
+                              ? 'Stage 5 Complete! You can now claim your Certificate of Achievement and turn it into Google Classroom.'
+                              : "You've used your 1 additional play for this stage! Return to the questions to earn stars. Unlock your Certificate at 38★ to replay anytime!"}
                           </p>
                         </div>
                         <button
-                          onClick={onClose}
+                          onClick={() => {
+                            onClose();
+                            if ((activeGameId === 'archery' || certificateUnlocked) && onOpenCertificate) {
+                              onOpenCertificate();
+                            }
+                          }}
                           className="game-btn w-full px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-display font-bold text-xs flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/20"
                         >
-                          <span>Continue to Stage Questions</span>
+                          <span>{activeGameId === 'archery' ? 'View Certificate of Achievement' : 'Continue to Stage Questions'}</span>
                           <ArrowRight className="w-3.5 h-3.5" />
                         </button>
                       </div>

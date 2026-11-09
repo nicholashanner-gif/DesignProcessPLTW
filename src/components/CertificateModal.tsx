@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Award,
@@ -11,6 +11,7 @@ import {
   Printer,
   Copy,
   Check,
+  CheckCircle2,
   ExternalLink,
   Star,
   Sparkles,
@@ -25,6 +26,7 @@ import {
 import {
   LevelData,
   LevelProgress,
+  DesignStageId,
   STAGES,
   calculateTotalStars,
   calculateStageProgress,
@@ -34,7 +36,8 @@ import {
   MIN_STARS_FOR_CERTIFICATE,
   ArcadeScores,
   ARCADE_GAMES,
-  calculateTotalArcadeScore
+  calculateTotalArcadeScore,
+  isGoalReached as isGoalReachedHelper
 } from '../utils/designQuestRules';
 
 interface CertificateModalProps {
@@ -45,6 +48,8 @@ interface CertificateModalProps {
   onUpdateStudentName: (name: string) => void;
   teacherEmail: string;
   arcadeScores: ArcadeScores;
+  isTeacherVerifiedView?: boolean;
+  verifiedStars?: number | null;
 }
 
 export const CertificateModal: React.FC<CertificateModalProps> = ({
@@ -54,14 +59,27 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
   studentName,
   onUpdateStudentName,
   teacherEmail,
-  arcadeScores
+  arcadeScores,
+  isTeacherVerifiedView = false,
+  verifiedStars = null
 }) => {
   const [copied, setCopied] = useState(false);
   const [isGeneratingPng, setIsGeneratingPng] = useState(false);
+  const [nameInput, setNameInput] = useState(studentName || '');
+  const [directedNotice, setDirectedNotice] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  const totalStars = calculateTotalStars(progress);
-  const isGoalReached = totalStars >= MIN_STARS_FOR_CERTIFICATE;
+  // Sync if prop updates
+  useEffect(() => {
+    if (studentName && !nameInput) {
+      setNameInput(studentName);
+    }
+  }, [studentName]);
+
+  const baseStars = calculateTotalStars(progress);
+  const totalStars = verifiedStars ? Math.max(verifiedStars, baseStars) : baseStars;
+  const isQuestComplete = Boolean(progress['lvl-5-3']?.completed && (progress['lvl-5-3']?.stars || 0) >= 1);
+  const isGoalReached = totalStars >= MIN_STARS_FOR_CERTIFICATE || isQuestComplete || isGoalReachedHelper(progress, levels) || Boolean(isTeacherVerifiedView);
   const earnedBadges = getEarnedBadges(progress, levels);
 
   // Formatted current date
@@ -79,12 +97,62 @@ export const CertificateModal: React.FC<CertificateModalProps> = ({
   );
 
   const appUrl = typeof window !== 'undefined' ? window.location.href.split('?')[0] : 'https://designquest.app';
+  
+  const stageIds: DesignStageId[] = ['ask', 'research', 'brainstorm', 'prototype', 'present'];
+  const stageStars = stageIds.map(stId => calculateStageProgress(stId, progress, levels).starsEarned);
+
   const classroomShareUrl = getGoogleClassroomShareUrl(
     appUrl,
     certificateCode,
     studentName || 'Student',
-    totalStars
+    totalStars,
+    {
+      arcadeScores,
+      stageStars
+    }
   );
+
+  const handleDirectToClassroom = async () => {
+    const trimmed = (nameInput || studentName || '').trim();
+    if (!trimmed || trimmed === 'Nicholas Hanner' || trimmed === 'Student') {
+      const entered = window.prompt(
+        'Please type your first and last name for your official certificate:',
+        trimmed === 'Nicholas Hanner' ? '' : trimmed
+      );
+      if (!entered || !entered.trim()) {
+        alert('Please enter your full name so your certificate is made out to you before attaching to Google Classroom!');
+        return;
+      }
+      setNameInput(entered.trim());
+      onUpdateStudentName(entered.trim());
+    } else {
+      onUpdateStudentName(trimmed);
+    }
+
+    try {
+      const text = getSubmissionTextReport();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 4000);
+      }
+    } catch {
+      // ignore
+    }
+
+    const currentName = (nameInput || studentName || 'Student').trim();
+    const currentCode = generateCertificateCode(currentName, totalStars, 1730000000);
+    const targetUrl = getGoogleClassroomShareUrl(
+      appUrl,
+      currentCode,
+      currentName,
+      totalStars,
+      { arcadeScores, stageStars }
+    );
+
+    setDirectedNotice(true);
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
 
   // Prepare full turn-in report text
   const getSubmissionTextReport = () => {
@@ -346,6 +414,108 @@ Verification Link: ${appUrl}?cert=${certificateCode}`;
 
         {/* Content Body */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-6">
+          {/* TEACHER VERIFIED MODE BANNER (When opened from Google Classroom submission link) */}
+          {isTeacherVerifiedView ? (
+            <div className="bg-emerald-50 border-2 border-emerald-400 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                  <ShieldCheck className="w-6 h-6" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider bg-emerald-200/80 text-emerald-900 px-2.5 py-0.5 rounded-full border border-emerald-400">
+                      Official Teacher Verification Mode
+                    </span>
+                    <span className="text-xs font-mono font-bold text-emerald-800">{certificateCode}</span>
+                  </div>
+                  <div className="text-sm font-bold text-emerald-950 mt-1">
+                    Student: <span className="underline font-extrabold">{studentName || 'Student'}</span> • {totalStars} / {levels.length * 3} Stars Earned
+                  </div>
+                  <p className="text-xs text-emerald-800/90 mt-0.5">
+                    Authenticated from Google Classroom assignment submission. All earned stars and stage achievements are verified.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  onClick={handleDownloadImage}
+                  disabled={isGeneratingPng}
+                  className="game-btn bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Download className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Download PNG</span>
+                </button>
+                <button
+                  onClick={handlePrint}
+                  className="game-btn bg-white hover:bg-emerald-100 text-emerald-900 border border-emerald-300 px-3.5 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Printer className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Print Certificate</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* STUDENT NAME ENTRY & GOOGLE CLASSROOM DIRECT TURN-IN CARD */
+            <div className="bg-gradient-to-r from-indigo-50 via-sky-50 to-amber-50 border-2 border-indigo-200 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs shrink-0">
+                    1
+                  </div>
+                  <div>
+                    <h3 className="font-display font-bold text-sm sm:text-base text-slate-900 flex items-center gap-2">
+                      <span>Type Your Full Name for the Official Certificate</span>
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      Enter your first and last name so it appears on your official engineering diploma and Google Classroom turn-in.
+                    </p>
+                  </div>
+                </div>
+                {studentName.trim() && studentName !== 'Nicholas Hanner' && studentName !== 'Student' && (
+                  <span className="text-[11px] font-bold text-emerald-700 bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-300 flex items-center gap-1 self-start sm:self-auto">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Name Confirmed
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="relative flex-1">
+                  <User className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={nameInput}
+                    onChange={e => {
+                      setNameInput(e.target.value);
+                      onUpdateStudentName(e.target.value);
+                    }}
+                    onBlur={() => {
+                      if (nameInput.trim()) onUpdateStudentName(nameInput.trim());
+                    }}
+                    placeholder="Type your full name (e.g. Alex Rivera, Maya Lin)..."
+                    className="w-full pl-9 pr-4 py-2.5 bg-white border-2 border-indigo-300 focus:border-indigo-600 rounded-xl text-sm font-bold text-slate-900 placeholder:text-slate-400 placeholder:font-normal focus:outline-none shadow-xs"
+                  />
+                </div>
+                <button
+                  onClick={handleDirectToClassroom}
+                  className="game-btn px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-display font-bold text-xs sm:text-sm flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 whitespace-nowrap cursor-pointer hover:scale-105"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  <span>Attach to Google Classroom</span>
+                </button>
+              </div>
+
+              {directedNotice && (
+                <div className="bg-emerald-100 border border-emerald-300 text-emerald-950 rounded-xl p-2.5 text-xs flex items-center gap-2 animate-fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    ✓ Directed to Google Classroom! Select your class and click <strong>Attach</strong> to submit your certificate. All your <strong>{totalStars} stars</strong> and arcade high scores are securely saved in the link so your teacher will see them!
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Goal Status Callout Banner */}
           <div
             className={`p-4 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
@@ -371,23 +541,14 @@ Verification Link: ${appUrl}?cert=${certificateCode}`;
                 <p className="text-xs opacity-90">
                   {isGoalReached
                     ? 'You have earned sufficient stars across the 5 design stages to claim your verifiable diploma.'
-                    : `Earn at least ${MIN_STARS_FOR_CERTIFICATE} stars to officially certify completion. You can still preview and download.`}
+                    : `Earn at least ${MIN_STARS_FOR_CERTIFICATE} stars or complete Stage 5-3 to officially certify completion. You can still preview and download.`}
                 </p>
               </div>
             </div>
 
-            {/* Student Name Input */}
-            <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
-              <User className="w-4 h-4 text-slate-400" />
-              <label htmlFor="student-name-input" className="sr-only">Student Name</label>
-              <input
-                id="student-name-input"
-                type="text"
-                value={studentName}
-                onChange={e => onUpdateStudentName(e.target.value)}
-                placeholder="Student Full Name"
-                className="text-xs font-bold text-slate-900 focus:outline-none w-36 sm:w-44"
-              />
+            <div className="flex items-center gap-2 font-mono text-xs font-bold text-slate-700 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shrink-0">
+              <Award className="w-4 h-4 text-amber-500" />
+              <span>{totalStars} / {levels.length * 3} Stars</span>
             </div>
           </div>
 
@@ -552,12 +713,12 @@ Verification Link: ${appUrl}?cert=${certificateCode}`;
               <span>Share & Turn In Status for Google Classroom:</span>
             </div>
 
-            {/* 38-Star Certificate Lock Notice */}
+            {/* Certificate Lock Notice (Only if neither 38 stars nor level 5-3 completed) */}
             {!isGoalReached && (
               <div className="bg-amber-100/80 border border-amber-300 rounded-xl p-3 flex items-start gap-2.5 text-xs text-amber-950">
                 <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                 <div>
-                  <span className="font-bold">Printing Locked (Requires 38 Stars):</span> Official certificate printing and PNG export unlock once you earn at least 38 stars across the design stages.
+                  <span className="font-bold">Printing Locked (Complete Level 5-3 or Earn 38 Stars):</span> Official certificate printing and PNG export unlock once you finish all 5 stages (Level 5-3) or collect at least 38 stars.
                   <div className="mt-1 font-semibold text-amber-800">
                     Current Progress: <span className="font-bold text-slate-900">{totalStars} / 38 Stars</span> ({Math.max(0, 38 - totalStars)} more stars needed)
                   </div>
@@ -567,21 +728,19 @@ Verification Link: ${appUrl}?cert=${certificateCode}`;
 
             <p className="text-xs text-slate-600">
               {isGoalReached
-                ? 'Official Diploma Unlocked! You can print, download your high-res certificate image, or share directly to Google Classroom.'
-                : 'You can submit your preliminary Classroom report or continue playing to reach 38 stars to unlock official certificate printing.'}
+                ? 'Official Diploma Unlocked! Attach directly to Google Classroom (your stars and high scores are embedded in the link so your teacher sees them), or download your high-res certificate image.'
+                : 'Complete Stage 5-3 or earn 38 stars to unlock official certificate printing and PNG download.'}
             </p>
 
             <div className="flex flex-wrap gap-2.5 pt-1">
               {/* Direct Google Classroom Share Link */}
-              <a
-                href={classroomShareUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="game-btn bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-display font-semibold text-xs flex items-center gap-2 shadow-sm"
+              <button
+                onClick={handleDirectToClassroom}
+                className="game-btn bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2.5 rounded-xl font-display font-semibold text-xs flex items-center gap-2 shadow-sm cursor-pointer hover:scale-105"
               >
                 <ExternalLink className="w-4 h-4" />
                 <span>Turn In to Google Classroom</span>
-              </a>
+              </button>
 
               {/* PNG Download Button - Locked until 38 stars */}
               <button

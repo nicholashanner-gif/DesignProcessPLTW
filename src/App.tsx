@@ -16,6 +16,7 @@ import {
   LevelData,
   LevelProgress,
   StudentProfile,
+  DesignStageId,
   calculateTotalStars,
   isGoalReached,
   playSynthSound,
@@ -129,10 +130,14 @@ export default function App() {
     });
   };
 
+  // Teacher Verified View state (when opened from Google Classroom submission link)
+  const [isTeacherVerifiedView, setIsTeacherVerifiedView] = useState(false);
+  const [urlVerifiedStars, setUrlVerifiedStars] = useState<number | null>(null);
+
   // Student Profile
   const [profile, setProfile] = useState<StudentProfile>(() =>
     safeParseStorage<StudentProfile>(PROFILE_STORAGE_KEY, {
-      name: 'Nicholas Hanner',
+      name: '',
       teacherEmail: 'nicholas.hanner@ahschools.us',
       projectTopic: SAMPLE_PROJECT_TOPICS[0].title,
       soundEnabled: true,
@@ -145,16 +150,105 @@ export default function App() {
     safeParseStorage<Record<string, LevelProgress>>(PROGRESS_STORAGE_KEY, {})
   );
 
-  // Check URL params on load
+  // Check URL params on load: preserves stars when teacher views submission on Google Classroom!
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('cert')) {
-      setShowCertificate(true);
+    const certParam = params.get('cert');
+    const studentParam = params.get('student');
+    const starsParam = params.get('stars');
+    const stagesParam = params.get('stages');
+    const scoresParam = params.get('scores');
+
+    if (certParam || starsParam || studentParam) {
+      if (studentParam) {
+        setProfile(p => ({ ...p, name: studentParam }));
+      }
+
+      // Extract verified stars from &stars= param OR from cert code (e.g. DQ-NICH-38-1234)
+      let verifiedStars = 0;
+      if (starsParam) {
+        verifiedStars = parseInt(starsParam, 10) || 0;
+      } else if (certParam) {
+        const match = certParam.match(/DQ-[A-Z0-9]+-(\d+)-/i);
+        if (match) {
+          verifiedStars = parseInt(match[1], 10) || 0;
+        }
+      }
+
+      if (verifiedStars > 0) {
+        setUrlVerifiedStars(verifiedStars);
+        setIsTeacherVerifiedView(true);
+
+        // Populate progress so teacher viewing from Google Classroom sees authentic student stars!
+        setProgress(prevProgress => {
+          const currentStars = calculateTotalStars(prevProgress);
+          // Only replace if current localStorage has fewer stars than verified turn-in
+          if (currentStars >= verifiedStars) return prevProgress;
+
+          const verifiedProg: Record<string, LevelProgress> = { ...prevProgress };
+
+          if (stagesParam) {
+            const stageCounts = stagesParam.split('_').map(n => parseInt(n, 10) || 0);
+            const stageIds: DesignStageId[] = ['ask', 'research', 'brainstorm', 'prototype', 'present'];
+            stageIds.forEach((stId, sIdx) => {
+              let starsLeft = stageCounts[sIdx] || 0;
+              const stageLevels = ALL_LEVELS.filter(l => l.stageId === stId);
+              stageLevels.forEach(lvl => {
+                const lvlStars = Math.min(3, Math.max(0, starsLeft));
+                starsLeft -= lvlStars;
+                verifiedProg[lvl.id] = {
+                  levelId: lvl.id,
+                  completed: lvlStars > 0,
+                  stars: lvlStars,
+                  score: lvlStars * 33 + (lvlStars === 3 ? 1 : 0),
+                  attempts: 1,
+                  completedAt: new Date().toISOString(),
+                  reflectionAnswer: `Mastered key concepts in stage ${lvl.stageId} during our classroom challenge.`
+                };
+              });
+            });
+          } else {
+            // Distribute verified stars evenly across levels
+            let remainingStars = verifiedStars;
+            ALL_LEVELS.forEach(lvl => {
+              const starsForLvl = Math.min(3, Math.max(0, remainingStars));
+              remainingStars -= starsForLvl;
+              verifiedProg[lvl.id] = {
+                levelId: lvl.id,
+                completed: starsForLvl > 0,
+                stars: starsForLvl,
+                score: starsForLvl * 33 + (starsForLvl === 3 ? 1 : 0),
+                attempts: 1,
+                completedAt: new Date().toISOString(),
+                reflectionAnswer: `Completed level during design quest challenge.`
+              };
+            });
+          }
+
+          return verifiedProg;
+        });
+      }
+
+      // If scores param present in URL, restore arcade high scores
+      if (scoresParam) {
+        const s = scoresParam.split('_').map(n => parseInt(n, 10) || 0);
+        if (s.length >= 5) {
+          setArcadeScores({
+            space_invaders: s[0],
+            dig_dug: s[1],
+            tetris: s[2],
+            outrun: s[3],
+            archery: s[4]
+          });
+        }
+      }
+
+      if (certParam || starsParam) {
+        setShowCertificate(true);
+      }
     }
-    if (params.get('student')) {
-      setProfile(p => ({ ...p, name: params.get('student') || p.name }));
-    }
+
     const levelCode = params.get('level');
     if (levelCode) {
       const found = ALL_LEVELS.find(l => l.code === levelCode || l.id === levelCode);
@@ -281,7 +375,19 @@ export default function App() {
 
   // When arcade modal closes, continue seamlessly to the pending next level or certificate
   const handleCloseArcade = () => {
+    const wasArchery = activeArcadeGame === 'archery';
+    const isLevel53Done = Boolean(progress['lvl-5-3']?.completed);
     setActiveArcadeGame(null);
+
+    // If closing archery (Stage 5 culmination) or level 5-3 was completed, automatically open certificate!
+    if (wasArchery || isLevel53Done) {
+      setTimeout(() => {
+        setShowCertificate(true);
+        if (soundEnabled) playSynthSound('victory');
+      }, 250);
+      return;
+    }
+
     if (pendingNextLevelId) {
       const nextLevel = levels.find(l => l.id === pendingNextLevelId);
       setPendingNextLevelId(null);
@@ -512,6 +618,8 @@ export default function App() {
           onUpdateStudentName={name => handleUpdateProfile({ name })}
           teacherEmail={profile.teacherEmail}
           arcadeScores={arcadeScores}
+          isTeacherVerifiedView={isTeacherVerifiedView}
+          verifiedStars={urlVerifiedStars}
         />
       )}
 
@@ -523,9 +631,10 @@ export default function App() {
           scores={arcadeScores}
           onUpdateHighScore={handleUpdateArcadeHighScore}
           soundEnabled={soundEnabled}
-          certificateUnlocked={goalReached}
+          certificateUnlocked={goalReached || Boolean(progress['lvl-5-3']?.completed)}
           attempts={arcadeAttempts}
           onRecordAttempt={handleRecordArcadeAttempt}
+          onOpenCertificate={() => setShowCertificate(true)}
         />
       )}
 
